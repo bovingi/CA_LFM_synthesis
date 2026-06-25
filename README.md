@@ -32,7 +32,6 @@ Scripts are numbered in execution order. Run from the project root directory:
 7. **`R/07_Q2_model_params.Rmd`** — Q2: Model parameter relationships and isoclines (Figs 6-7, S9)
 8. **`R/08_Q3_trait_correlations.Rmd`** — Q3: Trait-parameter correlations (Figs 8-9, S7, S10-S12, Table S6)
 9. **`R/09_Q4_model_prediction.Rmd`** — Q4: Model selection and prediction testing (Fig 10, Table S7)
-10. **`R/10_Fig8_hydraulics.Rmd`** — Hydraulic trait visualization (Fig 8)
 
 Scripts 00 (`00_figure_setup.R`, `00_functions.R`) are sourced automatically by the analysis scripts.
 

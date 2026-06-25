@@ -94,11 +94,12 @@ make_lm_plot <- function(df, xvar, yvar, xlab, ylab,
 library(dplyr)
 library(cowplot)
 
-df_plot <- concept_params_df %>% 
+df_plot <- concept_params_df %>%
   filter(group == "species") %>%
+  distinct(species, .keep_all = TRUE) %>%
   mutate(
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Conifer",
       TRUE ~ as.character("Angiosperm")))
     
 
@@ -596,6 +597,7 @@ color_species <- c(
 # ----------------------------
 spres <- concept_params_df %>%
   filter(group == "grand") %>%
+  distinct(species, .keep_all = TRUE) %>%
   mutate(
     model1.int = intercept,
     model1.slp = slope,
@@ -811,6 +813,7 @@ color_habit <- c(
 # ----------------------------
 spres <- concept_params_df %>%
   filter(group == "grand") %>%
+  distinct(species, .keep_all = TRUE) %>%
   mutate(
     model1.int = intercept,
     model1.slp = slope,
@@ -1033,6 +1036,7 @@ color_growth <- c(
 # ----------------------------
 spres <- concept_params_df %>%
   filter(group == "grand") %>%
+  distinct(species, .keep_all = TRUE) %>%
   mutate(
     model1.int  = intercept,
     model1.slp  = slope,

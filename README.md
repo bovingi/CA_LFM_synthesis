@@ -37,8 +37,8 @@ Scripts 00 (`00_figure_setup.R`, `00_functions.R`) are sourced automatically by 
 
 ## Data sources
 
-- **Pepperwood Preserve**: Field measurements from [PepperwoodVegPlots](https://github.com/dackerly/PepperwoodVegPlots)
+- **Pepperwood Preserve**: Field measurements from Pepperwood Preserve
 - **Stunt Ranch**: Pivovaroff et al. water potential vs. LFM data
 - **Sierra Nevada**: Sierra LFM and water potential measurements
 - **Sedgwick Reserve**: 2022 LFM and water potential data
-- **Species traits**: Compiled from [TRY Plant Trait Database](https://www.try-db.org/) and literature values
+- **Species traits**: Compiled from [TRY Plant Trait Database](https://www.try-db.org/) (accessed 2024-10-14) and literature values

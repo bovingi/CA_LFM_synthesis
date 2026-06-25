@@ -1,0 +1,198 @@
+---
+title: "Q1 Bayesian Analysis"
+author: "Indra Boving"
+date: "2026-01-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Read in data:
+
+```{r data_setup, include=FALSE}
+rm(list = ls())
+library(tidyverse)
+library(here)
+library(janitor)
+library(ggpmisc)
+source(here("R", "00_figure_setup.R"))
+```
+
+```{r load_data}
+df1 <- read_csv(here("data", "df1.csv"))
+```
+
+###### Bayesian forest plot:
+```{r model_run}
+library(brms)
+library(tidybayes)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(forcats)
+library(posterior)
+
+df1 <- df1 %>%
+  mutate(
+    species = as.factor(species),
+    study   = as.factor(study),
+    mwp_z   = as.numeric(scale(mwp))
+  )
+
+priors <- c(
+  prior(normal(0, 1), class = "b"),
+  prior(student_t(3, 0, 1), class = "sigma")
+)
+
+fit_spp_slopes <- brm(
+  formula = ilfm ~ 0 + species + 0 + mwp_z:species + (1 | study),
+  data    = df1,
+  family  = gaussian(),
+  prior   = priors,
+  chains  = 4, cores = 4, iter = 4000, warmup = 1000,
+  seed    = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 15)
+)
+
+pp_check(fit_spp_slopes)
+summary(fit_spp_slopes)
+```
+
+# FIGURE 4.
+
+Figure 4. Bayesian ridgeline plot of species-specific relationships between LFM and water potential. Posterior distributions of iLFM and z-scored midday water potential. Posterior distributions are colored based on whether they explicitly overlap with the angiosperm (non-conifer) group slope, the gymnosperm (conifer) group slope, or both. Species codes are colored by genus on the y-axis. Slope = 0 shown with a dashed vertical line.
+
+```{r figure_4_generation}
+library(tidybayes)
+library(dplyr)
+library(ggplot2)
+library(ggridges)
+library(forcats)
+library(stringr)
+library(here)
+library(U.Taxonstand)
+
+SpCodes <- read_csv(here("data", "SpCodes.csv")) %>%
+  mutate(species = SpCode6) %>%
+  mutate(family = familyMatch(splist = c(Genus), taxon = "plant")$family)
+
+slope_draws <- fit_spp_slopes %>%
+  gather_draws(`^b_species.*:mwp_z$`, regex = TRUE) %>%
+  mutate(
+    species = gsub("^b_species", "", .variable),
+    species = gsub(":mwp_z$", "", species)
+  ) %>%
+  transmute(.draw, species, slope = .value)
+
+exclude_spp <- c("ABICON", "PINJEF", "CALDEC", "PSEMEN")
+
+grand_angio <- slope_draws %>%
+  filter(!species %in% exclude_spp) %>%
+  group_by(.draw) %>%
+  summarise(grand_slope_angio = mean(slope, na.rm = TRUE), .groups = "drop")
+
+angio_med <- median(grand_angio$grand_slope_angio)
+angio_ci  <- quantile(grand_angio$grand_slope_angio, probs = c(0.025, 0.975), na.rm = TRUE)
+
+grand_gymno <- slope_draws %>%
+  filter(species %in% exclude_spp) %>%
+  group_by(.draw) %>%
+  summarise(grand_slope_gymno = mean(slope, na.rm = TRUE), .groups = "drop")
+
+gymno_med <- median(grand_gymno$grand_slope_gymno)
+gymno_ci  <- quantile(grand_gymno$grand_slope_gymno, probs = c(0.025, 0.975), na.rm = TRUE)
+
+species_summary <- slope_draws %>%
+  group_by(species) %>%
+  summarise(
+    mean = mean(slope),
+    lo = quantile(slope, 0.025, na.rm = TRUE),
+    hi = quantile(slope, 0.975, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    overlaps_angio = !(hi < angio_ci[[1]] | lo > angio_ci[[2]]),
+    overlaps_gymno = !(hi < gymno_ci[[1]] | lo > gymno_ci[[2]]),
+    overlap_cat = case_when(
+      overlaps_angio & overlaps_gymno ~ "Overlaps Both",
+      overlaps_angio                  ~ "Overlaps Angio.",
+      overlaps_gymno                  ~ "Overlaps Gymno.",
+      TRUE                            ~ "Differs (Both)"
+    )
+  )
+
+species_order <- species_summary %>%
+  arrange(desc(mean)) %>%
+  pull(species)
+
+species_levels_for_plot <- rev(species_order)
+
+plot_df <- slope_draws %>%
+  left_join(species_summary %>% select(species, overlap_cat), by = "species") %>%
+  mutate(
+    species = factor(species, levels = species_levels_for_plot),
+    overlap_cat = factor(overlap_cat, levels = c(
+      "Overlaps Angio.",
+      "Overlaps Gymno.",
+      "Overlaps Both",
+      "Differs (Both)"
+    ))
+  )
+
+functional_colors <- c(
+  "Angiosperm" = "goldenrod",
+  "Gymnosperm" = "#17154f"
+)
+
+species_levels <- levels(plot_df$species)
+
+axis_y_cols <- tibble(species = species_levels) %>%
+  mutate(
+    functional_group = if_else(species %in% exclude_spp, "Gymnosperm", "Angiosperm"),
+    col = functional_colors[functional_group]
+  ) %>%
+  pull(col)
+
+xlims <- c(-0.55, 0.3)
+
+p_slopes_final <- ggplot(plot_df, aes(x = slope, y = species, fill = overlap_cat)) +
+  geom_vline(xintercept = 0, linetype = 2, linewidth = 0.4) +
+  geom_vline(xintercept = angio_med, linewidth = 0.8, color = "goldenrod") +
+  geom_vline(xintercept = gymno_med, linewidth = 0.8, color = "#17154f") +
+  geom_density_ridges(scale = 2.2, rel_min_height = 0.01, alpha = 0.85, color = NA) +
+  scale_fill_manual(values = c(
+    "Overlaps Angio." = "#f5bb50",
+    "Overlaps Gymno." = "#17154f",
+    "Overlaps Both"   = "grey60",
+    "Differs (Both)"  = "grey30"
+  )) +
+  coord_cartesian(xlim = xlims) +
+  labs(
+    x = expression("Posterior of species slope (iLFM ~ " * italic(Psi)[MD] * ")"),
+    y = NULL,
+    fill = "Group Overlap"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = c(0.86, 0.20),
+    legend.direction = "vertical",
+    legend.background = element_rect(fill = "transparent", color = NA),
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.text = element_text(size = 10),
+    axis.text.y = element_text(color = axis_y_cols, face = "bold", size = 11),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+p_slopes_final
+
+ggsave(
+  filename = here("output", "figures", "main", "Fig_04_bayesian_ridgeline.png"),
+  plot     = p_slopes_final,
+  width    = 7,
+  height   = 6,
+  units    = "in",
+  dpi      = 300
+)
+```

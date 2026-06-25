@@ -1,0 +1,736 @@
+---
+title: "Q4: Trait-Based Model Prediction"
+author: "Indra Boving"
+date: "2026-01-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(brms)
+library(tidyverse)
+library(here)
+```
+
+
+2) If you were to take all the significant relationships of model parameters with traits, could you build a multivariate model that predicts LFMmin, and then compare it to observed? The value would be for modelers who have functional trait databases, to show how close we can get in predictions based only on the functional traits
+
+#Read in data: 
+
+```{r}
+concept_df <- read_csv(here("data", "concept_df.csv")) %>% 
+  filter(group == "species") %>% 
+  select(mwp, ilfm, species, study) 
+
+q3_df <- read_csv(here("data", "q3_df.csv"))
+
+q4_df <- merge(concept_df, q3_df, by = c("species")) %>%
+  filter(!is.na(sla)) %>%
+  mutate(
+    psi_z = as.numeric(scale(mwp)),   # or psi_md if that’s the column name
+    sla_z = as.numeric(scale(sla))
+  )
+
+q4_df %>% write_csv(here("data", "q4_df.csv"))
+```
+
+#Table S5: Final model selection
+```{r}
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(Metrics)
+library(knitr)
+library(kableExtra)
+library(here)
+
+# ---------------------------------------------------------
+# 1. Prepare the Master Dataset
+# ---------------------------------------------------------
+# We must drop NAs for all variables used in ANY of the 9 models
+# so they are all compared on the exact same dataset.
+df_mod <- q4_df %>%
+  filter(plc50_stem >= -8 & plc50_stem <= -1) %>%
+  filter(sla > 0 & sla < 100) %>% 
+  filter(
+    !is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), 
+    !is.na(ldmc), !is.na(psi_tlp), !is.na(functional_type), !is.na(species)
+  ) %>%
+  mutate(
+    mwp_z    = as.numeric(scale(mwp)),
+    p50_z    = as.numeric(scale(plc50_stem)),
+    sla_z    = as.numeric(scale(sla)),
+    tlp_z    = as.numeric(scale(psi_tlp)),
+    ldmc_z   = as.numeric(scale(ldmc)),
+    functional_type = as.factor(functional_type)
+  )
+
+# VIF Check
+library(car)
+species_traits <- df_mod %>% select(species, sla, ldmc) %>% distinct()
+cat("SLA-LDMC correlation:", cor(species_traits$sla, species_traits$ldmc), "\n")
+
+mod_vif_check <- lmer(
+  ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+  data = df_mod, REML = TRUE
+)
+cat("VIF:\n")
+print(vif(mod_vif_check))
+
+# ---------------------------------------------------------
+# 2. Define Your 9 A Priori Models
+# ---------------------------------------------------------
+formulas <- list(
+  "P50 + SLA + LDMC + TLP" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * tlp_z + (1 | species),
+  
+  "P50 + SLA + LDMC + TLP + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (1 | species),
+  
+  "P50 + SLA + LDMC + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (1 | species),
+  
+  "TLP + SLA + LDMC + F. Type" = ilfm ~ mwp_z * tlp_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (1 | species),
+  
+  "P50 + SLA + LDMC" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+  
+  "SLA + LDMC + F. Type" = ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (1 | species),
+  
+  "LDMC + F. Type" = ilfm ~ mwp_z * ldmc_z +  functional_type * mwp_z + (1 | species),
+  
+  "SLA + F. Type" = ilfm ~ mwp_z * sla_z + functional_type * mwp_z + (1 | species),
+  
+  "SLA Only" = ilfm ~ mwp_z * sla_z + (1 | species),
+  
+  # P50 + TLP + F. Type (Hydraulics only, no leaf economics)
+  "TLP + P50 + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * tlp_z + functional_type * mwp_z + (1 | species),
+  
+  "TLP Only" = ilfm ~ mwp_z * tlp_z + (1 | species),
+  
+  "P50 Only" = ilfm ~ mwp_z * p50_z+ (1 | species),
+  
+  "LDMC Only" = ilfm ~ mwp_z * ldmc_z+ (1 | species),
+  
+  "F.Type Only" = ilfm ~ mwp_z * functional_type + (1 | species),
+  
+  "WP Only (Null)" = ilfm ~ mwp_z + (1 | species)
+)
+
+# ---------------------------------------------------------
+# 3. Evaluate Models and Run Cross-Validation
+# ---------------------------------------------------------
+results_list <- list()
+species_list <- unique(df_mod$species)
+
+cat("Running evaluations and cross-validation for 9 hypothesis-driven models...\n")
+
+for(model_name in names(formulas)) {
+  
+  current_formula <- formulas[[model_name]]
+  
+  # A. Fit Full Model (REML = FALSE is required to compare fixed effects with AIC)
+  full_mod <- lmer(current_formula, data = df_mod, REML = FALSE)
+  
+  # B. Calculate AIC & In-Sample R2
+  mod_aic <- AIC(full_mod)
+  in_sample_preds <- predict(full_mod)
+  in_sample_r2 <- cor(df_mod$ilfm, in_sample_preds)^2
+  
+  # C. Leave-One-Species-Out CV Loop
+  cv_preds <- numeric(nrow(df_mod))
+  
+  for(sp in species_list) {
+    train_data <- df_mod %>% filter(species != sp)
+    test_data  <- df_mod %>% filter(species == sp)
+    
+    cv_mod <- lmer(current_formula, data = train_data, REML = FALSE)
+    cv_preds[df_mod$species == sp] <- predict(cv_mod, newdata = test_data, allow.new.levels = TRUE)
+  }
+  cv_r2 <- cor(df_mod$ilfm, cv_preds)^2
+  
+  # D. Store Results
+  results_list[[model_name]] <- data.frame(
+    Model = model_name,
+    AIC = mod_aic,
+    In_Sample_R2 = in_sample_r2,
+    Cross_Val_R2 = cv_r2
+  )
+}
+
+# ---------------------------------------------------------
+# 4. Format the Dataframe
+# ---------------------------------------------------------
+model_comparison_df <- do.call(rbind, results_list)
+
+min_aic <- min(model_comparison_df$AIC)
+
+final_df <- model_comparison_df %>%
+  mutate(Delta_AIC = AIC - min_aic) %>%
+  arrange(Delta_AIC) %>%
+  # Round numbers for clean presentation
+  mutate(
+    AIC = round(AIC, 1),
+    Delta_AIC = round(Delta_AIC, 1),
+    In_Sample_R2 = round(In_Sample_R2, 3),
+    Cross_Val_R2 = round(Cross_Val_R2, 3)
+  ) %>%
+  # Clean up headers
+  rename(
+    `Candidate Model` = Model,
+    `Delta AIC` = Delta_AIC,
+    `In-Sample R-squared` = In_Sample_R2,
+    `Cross-Val R-squared` = Cross_Val_R2
+  )
+
+rownames(final_df) <- NULL
+
+# ---------------------------------------------------------
+# 5. Create and Save the Publication kable Table
+# ---------------------------------------------------------
+pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
+  # Highlight the best model row in bold
+  row_spec(1, bold = TRUE) 
+
+# Print to Viewer
+pub_table
+
+# Save as an HTML file for easy copy/pasting into Word
+write.csv(final_df, here("output", "tables", "Table_S07_model_comparison.csv"), row.names = FALSE)
+tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
+
+cat("Done! Table saved to figures/Table_Hypothesis_Models.html\n")
+
+# ---------------------------------------------------------
+# 4. Filter, Format, and Rank
+# ---------------------------------------------------------
+model_comparison_df <- do.call(rbind, results_list)
+
+min_aic <- min(model_comparison_df$AIC)
+
+final_df <- model_comparison_df %>%
+  mutate(Delta_AIC = AIC - min_aic) %>%
+  # Explicitly keep models within 10 AIC, PLUS your two baselines
+  filter(Delta_AIC <= 10 | Model %in% c("WP Only (Null)", "F. Type Only")) %>%
+  arrange(Delta_AIC) %>%
+  # Round numbers for clean presentation
+  mutate(
+    AIC = round(AIC, 1),
+    Delta_AIC = round(Delta_AIC, 1),
+    In_Sample_R2 = round(In_Sample_R2, 3),
+    Cross_Val_R2 = round(Cross_Val_R2, 3)
+  ) %>%
+  # Clean up headers
+  rename(
+    `Candidate Model` = Model,
+    `Delta AIC` = Delta_AIC,
+    `In-Sample R-squared` = In_Sample_R2,
+    `Cross-Val R-squared` = Cross_Val_R2
+  )
+
+rownames(final_df) <- NULL
+
+# ---------------------------------------------------------
+# 5. Create and Save the Publication kable Table
+# ---------------------------------------------------------
+pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
+  row_spec(1, bold = TRUE) 
+
+# Print to Viewer
+pub_table
+
+# Save as an HTML file for easy copy/pasting into Word
+write.csv(final_df, here("output", "tables", "Table_S07_model_comparison_filtered.csv"), row.names = FALSE)
+tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison_filtered.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
+
+cat("Done! Table saved to figures/Table_Hypothesis_Models_Filtered.html\n")
+```
+
+
+####v2: Colored points 
+```{r}
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(ggplot2)
+library(patchwork)
+library(Metrics) # for calculating RMSE and R-squared
+library(here)
+
+# ---------------------------------------------------------
+# 1. Load, clean data, and assign plot groups
+# ---------------------------------------------------------
+df <- q4_df
+
+df_mod <- df %>%
+  # Drop missing values
+  filter(!is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), !is.na(ldmc), !is.na(species), !is.na(psi_tlp)) %>%
+  # Standardize continuous predictors (z-scores)
+  mutate(
+    mwp_z = as.numeric(scale(mwp)),
+    p50_z = as.numeric(scale(plc50_stem)),
+    sla_z = as.numeric(scale(sla)),
+    tlp_z = as.numeric(scale(psi_tlp)),
+    ldmc_z = as.numeric(scale(ldmc))
+  ) %>%
+  # Create the grouping variable for the plot colors
+  mutate(
+    plot_group = case_when(
+      grepl("gymnosperm", functional_type, ignore.case = TRUE) ~ "Conifer",
+      grepl("sal", species, ignore.case = TRUE) ~ "Salvia",
+      TRUE ~ "Other Angiosperm"
+    ),
+    # Make it a factor to control the legend order
+    plot_group = factor(plot_group, levels = c("Conifer", "Salvia", "Other Angiosperm"))
+  )
+
+# ---------------------------------------------------------
+# 2. Frequentist Framework (lmer)
+# ---------------------------------------------------------
+freq_mod <- lmer(
+  ilfm ~  mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * p50_z + mwp_z * tlp_z+ (1 | species), 
+  data = df_mod, 
+  REML = TRUE
+)
+
+# summary() will now give you p-values
+summary(freq_mod)
+
+# ---------------------------------------------------------
+# 3. Model Predictions (In-Sample and Out-of-Sample)
+# ---------------------------------------------------------
+# In-Sample
+df_mod$predicted_ilfm <- predict(freq_mod)
+in_sample_r2 <- cor(df_mod$ilfm, df_mod$predicted_ilfm)^2
+in_sample_rmse <- rmse(df_mod$ilfm, df_mod$predicted_ilfm)
+
+# Out-of-Sample (Leave-One-Species-Out)
+df_mod$cv_predicted_ilfm <- NA
+species_list <- unique(df_mod$species)
+
+for(sp in species_list) {
+  train_data <- df_mod %>% filter(species != sp)
+  test_data <- df_mod %>% filter(species == sp)
+  
+  temp_mod <- lmer(
+    ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * p50_z + mwp_z * tlp_z +(1 | species), 
+    data = train_data,
+    REML = FALSE 
+  )
+  
+  preds <- predict(temp_mod, newdata = test_data, allow.new.levels = TRUE)
+  df_mod$cv_predicted_ilfm[df_mod$species == sp] <- preds
+}
+
+cv_r2 <- cor(df_mod$ilfm, df_mod$cv_predicted_ilfm)^2
+cv_rmse <- rmse(df_mod$ilfm, df_mod$cv_predicted_ilfm)
+
+# ---------------------------------------------------------
+# 4. Build Publication-Ready Plots
+# ---------------------------------------------------------
+# Find the absolute min and max across ALL predictions and observations 
+min_val <- min(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), na.rm = TRUE)
+max_val <- max(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), na.rm = TRUE)
+
+anno_text_insample <- sprintf("In-Sample R2 = %.2f\nRMSE = %.2f", in_sample_r2, in_sample_rmse)
+anno_text_cv <- sprintf("Predictive R2 = %.2f\nRMSE = %.2f", cv_r2, cv_rmse)
+
+# Custom color palette
+my_colors <- c(
+  "Conifer" = "#636B2F",       # Light Green
+  "Salvia" = "#F768A1",           # Pink
+  "Other Angiosperm" = "grey70"   # Default Grey
+)
+ df_mod <- df_mod %>%
+  # Make sure the label is "Conifer" instead of "Gymnosperm"
+  mutate(
+    plot_group = str_replace(plot_group, "Gymnosperm", "Conifer"),
+    plot_group = factor(plot_group, levels = c("Conifer", "Salvia", "Other Angiosperm"))
+  ) %>%
+  # Sorting by desc(plot_group) puts "Other Angiosperm" first in the dataframe
+  arrange(desc(plot_group))
+# Panel A: In-Sample Plot
+plot_insample_pub <- ggplot(df_mod, aes(x = predicted_ilfm, y = ilfm)) +
+  # Map the fill to our new plot_group
+  geom_point(aes(fill = plot_group), alpha = 0.6, shape = 21, color = "black", size = 2.5) +
+  scale_fill_manual(values = my_colors) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
+  annotate("text", x = min_val, y = max_val, label = anno_text_insample, 
+           hjust = 0, vjust = 1, size = 5) +
+  labs(
+    x = "Predicted iLFM (In-Sample)",
+    y = "Observed iLFM",
+    fill = "Plant Group" # Clean legend title
+  ) +
+  coord_fixed(xlim = c(min_val, max_val), ylim = c(min_val, max_val)) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    legend.position = "none" # Hide legend on the first plot so it doesn't duplicate
+  )
+
+# Panel B: Cross-Validation Plot
+plot_cv_pub <- ggplot(df_mod, aes(x = cv_predicted_ilfm, y = ilfm)) +
+  geom_point(aes(fill = plot_group), alpha = 0.6, shape = 21, color = "black", size = 2.5) +
+  scale_fill_manual(values = my_colors) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
+  annotate("text", x = min_val, y = max_val, label = anno_text_cv, 
+           hjust = 0, vjust = 1, size = 5) +
+  labs(
+    x = "Predicted iLFM (Unseen Species)",
+    y = "Observed iLFM",
+    fill = "Plant Group"
+  ) +
+  coord_fixed(xlim = c(min_val, max_val), ylim = c(min_val, max_val)) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1) 
+  )
+
+# ---------------------------------------------------------
+# 5. Combine and Save
+# ---------------------------------------------------------
+# Stitch together with patchwork and add A/B tags
+# collect_guides() ensures we only have one clean legend for the whole figure
+combined_plot <- plot_insample_pub + plot_cv_pub + 
+  plot_annotation(tag_levels = 'A') +
+  plot_layout(guides = "collect") 
+
+combined_plot
+
+ggsave(
+  filename = here("output", "figures", "main", "Fig_10_observed_vs_predicted.png"), 
+  plot     = combined_plot,
+  width    = 13,   # Added an extra inch of width to make room for the legend
+  height   = 6,   
+  units    = "in",
+  dpi      = 300
+)
+```
+
+##Bayesian approach: 
+
+
+#Version with just angiosperms: 
+
+###Table S6: Final model selection, no gymnos:
+```{r}
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(Metrics)
+library(knitr)
+library(kableExtra)
+library(here)
+
+# ---------------------------------------------------------
+# 1. Prepare the Master Dataset
+# ---------------------------------------------------------
+# We must drop NAs for all variables used in ANY of the 9 models
+# so they are all compared on the exact same dataset.
+df_mod <- q4_df %>%
+  filter(plc50_stem >= -8 & plc50_stem <= -1) %>%
+  filter(sla > 0 & sla < 100) %>% 
+  filter(
+    !is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), 
+    !is.na(ldmc), !is.na(psi_tlp), !is.na(functional_type), !is.na(species)
+  ) %>%
+  mutate(
+    mwp_z    = as.numeric(scale(mwp)),
+    p50_z    = as.numeric(scale(plc50_stem)),
+    sla_z    = as.numeric(scale(sla)),
+    tlp_z    = as.numeric(scale(psi_tlp)),
+    ldmc_z   = as.numeric(scale(ldmc)),
+    functional_type = as.factor(functional_type)
+  ) %>% 
+  filter(functional_type == "angiosperm")
+
+# ---------------------------------------------------------
+# 2. Define Your 9 A Priori Models
+# ---------------------------------------------------------
+formulas <- list(
+  "P50 + SLA + LDMC + TLP" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * tlp_z + (1 | species),
+
+  "P50 + SLA + LDMC" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+
+  "TLP + SLA + LDMC" = ilfm ~ mwp_z * tlp_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+
+  "SLA + LDMC" = ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+
+  "TLP + P50" = ilfm ~ mwp_z * p50_z + mwp_z * tlp_z + (1 | species),
+
+  "SLA + TLP" = ilfm ~ mwp_z * sla_z + mwp_z * tlp_z + (1 | species),
+
+  "LDMC + TLP" = ilfm ~ mwp_z * ldmc_z + mwp_z * tlp_z + (1 | species),
+
+  "SLA + P50" = ilfm ~ mwp_z * sla_z + mwp_z * p50_z + (1 | species),
+
+  "LDMC + P50" = ilfm ~ mwp_z * ldmc_z + mwp_z * p50_z + (1 | species),
+
+  "SLA Only" = ilfm ~ mwp_z * sla_z + (1 | species),
+
+  "TLP Only" = ilfm ~ mwp_z * tlp_z + (1 | species),
+
+  "P50 Only" = ilfm ~ mwp_z * p50_z + (1 | species),
+
+  "LDMC Only" = ilfm ~ mwp_z * ldmc_z + (1 | species),
+
+  "WP Only (Null)" = ilfm ~ mwp_z + (1 | species)
+)
+
+# ---------------------------------------------------------
+# 3. Evaluate Models and Run Cross-Validation
+# ---------------------------------------------------------
+results_list <- list()
+species_list <- unique(df_mod$species)
+
+cat("Running evaluations and cross-validation for 9 hypothesis-driven models...\n")
+
+for(model_name in names(formulas)) {
+  
+  current_formula <- formulas[[model_name]]
+  
+  # A. Fit Full Model (REML = FALSE is required to compare fixed effects with AIC)
+  full_mod <- lmer(current_formula, data = df_mod, REML = FALSE)
+  
+  # B. Calculate AIC & In-Sample R2
+  mod_aic <- AIC(full_mod)
+  in_sample_preds <- predict(full_mod)
+  in_sample_r2 <- cor(df_mod$ilfm, in_sample_preds)^2
+  
+  # C. Leave-One-Species-Out CV Loop
+  cv_preds <- numeric(nrow(df_mod))
+  
+  for(sp in species_list) {
+    train_data <- df_mod %>% filter(species != sp)
+    test_data  <- df_mod %>% filter(species == sp)
+    
+    cv_mod <- lmer(current_formula, data = train_data, REML = FALSE)
+    cv_preds[df_mod$species == sp] <- predict(cv_mod, newdata = test_data, allow.new.levels = TRUE)
+  }
+  cv_r2 <- cor(df_mod$ilfm, cv_preds)^2
+  
+  # D. Store Results
+  results_list[[model_name]] <- data.frame(
+    Model = model_name,
+    AIC = mod_aic,
+    In_Sample_R2 = in_sample_r2,
+    Cross_Val_R2 = cv_r2
+  )
+}
+
+# ---------------------------------------------------------
+# 4. Format the Dataframe
+# ---------------------------------------------------------
+model_comparison_df <- do.call(rbind, results_list)
+
+min_aic <- min(model_comparison_df$AIC)
+
+final_df <- model_comparison_df %>%
+  mutate(Delta_AIC = AIC - min_aic) %>%
+  arrange(Delta_AIC) %>%
+  # Round numbers for clean presentation
+  mutate(
+    AIC = round(AIC, 1),
+    Delta_AIC = round(Delta_AIC, 1),
+    In_Sample_R2 = round(In_Sample_R2, 3),
+    Cross_Val_R2 = round(Cross_Val_R2, 3)
+  ) %>%
+  # Clean up headers
+  rename(
+    `Candidate Model` = Model,
+    `Delta AIC` = Delta_AIC,
+    `In-Sample R-squared` = In_Sample_R2,
+    `Cross-Val R-squared` = Cross_Val_R2
+  )
+
+rownames(final_df) <- NULL
+
+# ---------------------------------------------------------
+# 5. Create and Save the Publication kable Table
+# ---------------------------------------------------------
+pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
+  # Highlight the best model row in bold
+  row_spec(1, bold = TRUE) 
+
+# Print to Viewer
+pub_table
+
+# Save as an HTML file for easy copy/pasting into Word
+write.csv(final_df, here("output", "tables", "Table_S07_model_comparison_angiosperms.csv"), row.names = FALSE)
+tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison_angiosperms.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
+
+cat("Done! Table saved to figures/Table_Hypothesis_Models_nogymno.html\n")
+```
+
+####Fig nogymno: Colored points 
+```{r}
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(ggplot2)
+library(patchwork)
+library(Metrics) # for calculating RMSE and R-squared
+library(here)
+
+# ---------------------------------------------------------
+# 1. Load, clean data, and assign plot groups
+# ---------------------------------------------------------
+df <- q4_df %>%
+  filter(functional_type == "angiosperm")
+
+df_mod <- df %>%
+  filter(!is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), !is.na(ldmc), !is.na(species), !is.na(psi_tlp)) %>%
+  mutate(
+    mwp_z = as.numeric(scale(mwp)),
+    p50_z = as.numeric(scale(plc50_stem)),
+    sla_z = as.numeric(scale(sla)),
+    tlp_z = as.numeric(scale(psi_tlp)),
+    ldmc_z = as.numeric(scale(ldmc))
+  ) %>%
+  mutate(
+    plot_group = case_when(
+      grepl("sal", species, ignore.case = TRUE) ~ "Salvia",
+      TRUE ~ "Other Angiosperm"
+    ),
+    plot_group = factor(plot_group, levels = c("Salvia", "Other Angiosperm"))
+  )
+
+# ---------------------------------------------------------
+# 2. Frequentist Framework (lmer)
+# ---------------------------------------------------------
+freq_mod <- lmer(
+  ilfm ~  mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * p50_z + mwp_z * tlp_z+ (1 | species), 
+  data = df_mod, 
+  REML = TRUE
+)
+
+# summary() will now give you p-values
+summary(freq_mod)
+
+# ---------------------------------------------------------
+# 3. Model Predictions (In-Sample and Out-of-Sample)
+# ---------------------------------------------------------
+# In-Sample
+df_mod$predicted_ilfm <- predict(freq_mod)
+in_sample_r2 <- cor(df_mod$ilfm, df_mod$predicted_ilfm)^2
+in_sample_rmse <- rmse(df_mod$ilfm, df_mod$predicted_ilfm)
+
+# Out-of-Sample (Leave-One-Species-Out)
+df_mod$cv_predicted_ilfm <- NA
+species_list <- unique(df_mod$species)
+
+for(sp in species_list) {
+  train_data <- df_mod %>% filter(species != sp)
+  test_data <- df_mod %>% filter(species == sp)
+  
+  temp_mod <- lmer(
+    ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z  + mwp_z * p50_z + mwp_z * tlp_z +(1 | species), 
+    data = train_data,
+    REML = FALSE 
+  )
+  
+  preds <- predict(temp_mod, newdata = test_data, allow.new.levels = TRUE)
+  df_mod$cv_predicted_ilfm[df_mod$species == sp] <- preds
+}
+
+cv_r2 <- cor(df_mod$ilfm, df_mod$cv_predicted_ilfm)^2
+cv_rmse <- rmse(df_mod$ilfm, df_mod$cv_predicted_ilfm)
+
+# ---------------------------------------------------------
+# 4. Build Publication-Ready Plots
+# ---------------------------------------------------------
+# Find the absolute min and max across ALL predictions and observations 
+min_val <- min(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), na.rm = TRUE)
+max_val <- max(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), na.rm = TRUE)
+
+anno_text_insample <- sprintf("In-Sample R2 = %.2f\nRMSE = %.2f", in_sample_r2, in_sample_rmse)
+anno_text_cv <- sprintf("Predictive R2 = %.2f\nRMSE = %.2f", cv_r2, cv_rmse)
+
+# Custom color palette
+my_colors <- c(
+  "Conifer" = "#636B2F",       # Light Green
+  "Salvia" = "#F768A1",           # Pink
+  "Other Angiosperm" = "grey70"   # Default Grey
+)
+ df_mod <- df_mod %>%
+  # Make sure the label is "Conifer" instead of "Gymnosperm"
+  mutate(
+    plot_group = str_replace(plot_group, "Gymnosperm", "Conifer"),
+    plot_group = factor(plot_group, levels = c("Conifer", "Salvia", "Other Angiosperm"))
+  ) %>%
+  # Sorting by desc(plot_group) puts "Other Angiosperm" first in the dataframe
+  arrange(desc(plot_group))
+# Panel A: In-Sample Plot
+plot_insample_pub <- ggplot(df_mod, aes(x = predicted_ilfm, y = ilfm)) +
+  # Map the fill to our new plot_group
+  geom_point(aes(fill = plot_group), alpha = 0.6, shape = 21, color = "black", size = 2.5) +
+  scale_fill_manual(values = my_colors) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
+  annotate("text", x = min_val, y = max_val, label = anno_text_insample, 
+           hjust = 0, vjust = 1, size = 5) +
+  labs(
+    x = "Predicted iLFM (In-Sample)",
+    y = "Observed iLFM",
+    fill = "Plant Group" # Clean legend title
+  ) +
+  coord_fixed(xlim = c(min_val, max_val), ylim = c(min_val, max_val)) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    legend.position = "none" # Hide legend on the first plot so it doesn't duplicate
+  )
+
+# Panel B: Cross-Validation Plot
+plot_cv_pub <- ggplot(df_mod, aes(x = cv_predicted_ilfm, y = ilfm)) +
+  geom_point(aes(fill = plot_group), alpha = 0.6, shape = 21, color = "black", size = 2.5) +
+  scale_fill_manual(values = my_colors) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
+  annotate("text", x = min_val, y = max_val, label = anno_text_cv, 
+           hjust = 0, vjust = 1, size = 5) +
+  labs(
+    x = "Predicted iLFM (Unseen Species)",
+    y = "Observed iLFM",
+    fill = "Plant Group"
+  ) +
+  coord_fixed(xlim = c(min_val, max_val), ylim = c(min_val, max_val)) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text = element_text(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1) 
+  )
+
+# ---------------------------------------------------------
+# 5. Combine and Save
+# ---------------------------------------------------------
+# Stitch together with patchwork and add A/B tags
+# collect_guides() ensures we only have one clean legend for the whole figure
+combined_plot <- plot_insample_pub + plot_cv_pub + 
+  plot_annotation(tag_levels = 'A') +
+  plot_layout(guides = "collect") 
+
+combined_plot
+
+ggsave(
+  filename = here("output", "figures", "SI", "Fig_10_angiosperms_only.png"), 
+  plot     = combined_plot,
+  width    = 13,   # Added an extra inch of width to make room for the legend
+  height   = 6,   
+  units    = "in",
+  dpi      = 300
+)
+```
+
+
+

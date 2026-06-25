@@ -1,0 +1,27 @@
+sp_code,max_rooting_depth_m,plc50_stem,psi_tlp,ldmc,sla,sla_try_units,swc,lma,psimin_pd,psimin_md,functional_type,growth_form,leaf_habit,rwc_at_tlp,reference_if_not_try_p50,reference_if_not_try_trait,species
+ABICON,NA,-3.8,-2.11,0.4028,37.689,4.60264848,1.0711,NA,NA,-3.28,gymnosperm,tree,evergreen,89.403,"Boving et al. 2026, Boving et al., 2025, Mencucinni et al 2021,","P50, TLP, SLA, RWCtlp, SWC;  Psimin_md",ABICON
+ADEFAS,7.62,-8.37,-3.4,0.5256,50.57214963,5.057214963,NA,3.95,NA,-5.93,angiosperm,shrub,evergreen,NA,NA,NA,ADEFAS
+ARBMEN,NA,-3,-1.91,0.4455,67.73463571,6.773463571,1.244668911,5.61,NA,NA,angiosperm,tree,evergreen,NA,Chacon et al 2020,P50,ARBMEN
+ARCGLA,5.18,-4.48,-2.51,0.2941,37.33807868,3.733807868,NA,1.244668911,-6.28,NA,angiosperm,shrub,evergreen,NA,"Madsen-Hepp,","LDMC,",ARCGLA
+ARCPAT,2,-4.5,-2.2,0.504,34.5317,3.601634223,0.632,3.6,NA,-5.374,angiosperm,shrub,evergreen,90.94,"Boving et al., 2025, RWCtlp, SWC;   Madsen-Hepp,",NA,ARCPAT
+CALDEC,NA,-6.79,-2.3,0.472,25.9883,32.96,1.351,NA,NA,NA,gymnosperm,tree,evergreen,NA,"Boving et al., 2025; Madsen-Hepp,","LMA, LDMC, RWCtlp, SWC;  SLA",CALDEC
+CEACOR,NA,NA,-2.7,NA,123,22.43,2.454,NA,NA,NA,angiosperm,shrub,evergreen,87.35,"Knight & Ackerley, 2001",SLA,CEACOR
+CEACUN,NA,-9.6,-2.6,0.471,43.02,4.302,1.504,5.6,-7.5,-8.15,angiosperm,shrub,evergreen,NA,"Fletcher et al., 2018","TLP, SLA",CEACUN
+CEAMEG,NA,-8.08,-1.87,0.3938,36.4476,NA,1.747,3.07,-5.447,-7.77,angiosperm,shrub,evergreen,NA,"Fletcher et al., 2018","TLP, LMA, SLA, SWC",CEAMEG
+CEAPAR,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,angiosperm,shrub,evergreen,NA,NA,NA,CEAPAR
+CEASPI,3.1,-7.25,-2.8,0.2649,70,7,1.652,1.257,-4.7,-5.44,angiosperm,shrub,evergreen,NA,"Fletcher et al., 2018","LMA, SWC",CEASPI
+CERBET,1.52,-7.51,-2.02,0.4636,68.69,6.869,NA,NA,NA,-6.8,angiosperm,shrub,evergreen,NA,NA,NA,CERBET
+ERIFAS,1.22,NA,-3.23,0.175,112.5206649,11.25206649,1.718650971,NA,NA,-9.05,angiosperm,shrub,semi-dec,NA,"Mecucinni et al., 2021",Psimin_md,ERIFAS
+HETARB,1.98,-5.7996,-2.7,0.3098,49.91392563,4.991392563,0.905669366,NA,NA,NA,angiosperm,shrub,evergreen,NA,NA,NA,HETARB
+MALLAU,13.2,-1.488,-2.07,0.2989,48.25,4.825,NA,NA,NA,NA,angiosperm,shrub,evergreen,86.19792379,NA,NA,MALLAU
+PINJEF,3.75,-3.11,-2.3,0.5332,22.7544,3.89481541,1.429,NA,NA,NA,gymnosperm,tree,evergreen,85.15,"Boving el al., 2025","RWCtlp, SWC;",PINJEF
+PSEMEN,2.4,-3.786,-2.79,0.519,63.51748677,6.351748677,0.932869445,5.61,-1.23,-2.06,gymnosperm,tree,evergreen,NA,"Condo and Reinhardt, 2019",P50,PSEMEN
+QUEAGR,10.7,-4.32,-2.58,0.2332,60.97817065,6.097817065,0.80261379,9.89,NA,-3.12,angiosperm,tree,evergreen,NA,"Chacon et al, 2020",TLP,QUEAGR
+QUEBER,NA,-5.64,-1.97,0.2198,56.75302781,5.675302781,NA,NA,-3.74,-4.35,angiosperm,tree,evergreen,NA,NA,NA,QUEBER
+QUEDOU,24.38,-4.48,-3.4,0.508,76.28852866,7.628852866,0.5075,0.97044335,NA,NA,angiosperm,tree,deciduous,NA,"Allen et al, in prep.",TLP,QUEDOU
+QUEDUR,NA,-4.29,-3.33,0.438,56.26687124,5.626687124,1.285191956,NA,NA,NA,angiosperm,tree,evergreen,NA,NA,NA,QUEDUR
+QUEGAR,NA,-3.38,-3.61,NA,79.6276,7.96276,NA,NA,NA,NA,angiosperm,tree,deciduous,73.51980796,"John et al, 2018; Hahm et al.,","RWC, TLP",QUEGAR
+QUEKEL,12.83,-3.86,-2.86,NA,94.234,9.397140815,1.333,NA,NA,NA,angiosperm,tree,deciduous,82.53,"Boving et al., 2025","RWCtlp, SWC;",QUEKEL
+SALLEU,NA,-1.659,-1.47,0.1666,129.6,12.96,NA,NA,NA,-4.73,angiosperm,shrub,deciduous,NA,NA,NA,SALLEU
+SALMEL,0.61,-4.532,-2.08,0.1474,100.2008864,10.02008864,NA,NA,-8.4,-7.55,angiosperm,shrub,deciduous,NA,NA,NA,SALMEL
+UMBCAL,NA,-1.2153,-2.39,0.524,80.41331976,8.041331976,0.909004136,NA,NA,-2.4,angiosperm,shrub,evergreen,87.13249926,"John et al, 2018","TLP, RWC",UMBCAL

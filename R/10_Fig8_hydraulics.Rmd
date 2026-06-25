@@ -1,0 +1,217 @@
+---
+title: "P50 vs Physiological Parameters (Non-Significance Dashed)"
+author: "Indra Boving"
+date: "2026-06-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(janitor)
+library(tidyverse)
+library(here)
+library(cowplot)
+library(scales)
+source(here("R", "00_figure_setup.R"))
+```
+
+```{r data-preparation}
+# Load data parameters
+concept_params_df <- read_csv(here::here("data", "concept_df.csv")) %>% 
+  clean_names() %>% 
+  group_by(species) %>% 
+  mutate(minlfm = min(lfm, na.rm = TRUE),
+         maxlfm = max(lfm, na.rm = TRUE),
+         minwp = min(mwp, na.rm = TRUE), 
+         maxwp = max(mwp, na.rm = TRUE),
+         intercept_lfm = 1/intercept) %>% 
+  merge(read_csv(here("data", "sp_info.csv"))) %>% 
+  clean_names()
+
+traits_df <- read_csv(here("data", "traits_rd_20250327.csv"))
+
+q3_df_raw <- merge(traits_df, concept_params_df, all = TRUE) %>% 
+  filter(group == "species") %>% 
+  mutate(min_lfm = minlfm,
+         min_mwp = minwp,
+         p50 = plc50_stem) %>% 
+  select(-date, -mwp, -lfm, -ilfm, -x1, -sp_site, -tissue_age) %>% 
+  distinct()
+
+# Collapse data to species-level means
+q3_df <- q3_df_raw %>%
+  group_by(species) %>%
+  summarize(
+    p50     = mean(p50, na.rm = TRUE),
+    min_mwp = mean(min_mwp, na.rm = TRUE),
+    min_lfm = mean(min_lfm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Split datasets to handle with/without Salvia groups at the species level
+q3_df_outs <- q3_df %>% filter(!(species %in% c("SALLEU", "SALMEL")))
+```
+
+```{r helper-functions}
+# Dynamic linetype helper based on significance
+get_lm_p <- function(df, y, x) {
+  d <- df %>% select(all_of(c(y, x))) %>% filter(is.finite(.data[[y]]), is.finite(.data[[x]]))
+  if (nrow(d) < 3) return(NA_real_)
+  summary(lm(reformulate(x, y), data = d))$coefficients[2, 4]
+}
+
+# STANDARD LOGIC: Non-significant lines (p >= 0.05) are dashed
+lt_from_p <- function(p, alpha = 0.05) {
+  ifelse(is.na(p), "dashed", ifelse(p < alpha, "solid", "dashed"))
+}
+```
+
+```{r plotting-panels}
+# Extract linetypes dynamically based on p-values
+lt_A_salv   <- lt_from_p(get_lm_p(q3_df,      "min_mwp", "p50"))
+lt_A_nosalv <- lt_from_p(get_lm_p(q3_df_outs, "min_mwp", "p50"))
+
+lt_B_salv   <- lt_from_p(get_lm_p(q3_df,      "min_lfm", "p50"))
+lt_B_nosalv <- lt_from_p(get_lm_p(q3_df_outs, "min_lfm", "p50"))
+
+# Increased text size layout configurations
+axis_theme <- theme_bw(base_size = 14) + 
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_text(size = 15),
+    axis.text  = element_text(size = 13),
+    plot.margin = margin(t = 6, r = 6, b = 6, l = 6)
+  )
+
+# --- Panel A ---
+fig5a <- ggplot() +
+  geom_point(data = q3_df, aes(x = p50, y = min_mwp, color = species), size = 2.5) +
+  geom_point(data = filter(q3_df, species %in% c("SALLEU", "SALMEL")), 
+             aes(x = p50, y = min_mwp, color = species), shape = 1, size = 6) +
+  color_species +
+  geom_smooth(data = q3_df, aes(x = p50, y = min_mwp), 
+              method = "lm", se = FALSE, color = "grey50", linetype = lt_A_salv) +
+  geom_smooth(data = q3_df_outs, aes(x = p50, y = min_mwp), 
+              method = "lm", se = FALSE, color = "black", linetype = lt_A_nosalv) +
+  labs(x = "P50 (MPa)", y = expression(Psi[MDmin]~"(MPa)")) +
+  scale_x_continuous(limits = c(-1.0, -10.0)) + 
+  axis_theme
+
+# --- Panel B ---
+fig5b <- ggplot() +
+  geom_point(data = q3_df, aes(x = p50, y = min_lfm, color = species), size = 2.5) +
+  geom_point(data = filter(q3_df, species %in% c("SALLEU", "SALMEL")), 
+             aes(x = p50, y = min_lfm, color = species), shape = 1, size = 6) +
+  color_species +
+  geom_smooth(data = q3_df, aes(x = p50, y = min_lfm), 
+              method = "lm", se = FALSE, color = "grey50", linetype = lt_B_salv) +
+  geom_smooth(data = q3_df_outs, aes(x = p50, y = min_lfm), 
+              method = "lm", se = FALSE, color = "black", linetype = lt_B_nosalv) +
+  labs(x = "P50 (MPa)", y = "LFMmin (%)") +
+  scale_y_continuous(breaks = c(0.4, 0.6, 0.8, 1.0), labels = c(40, 60, 80, 100)) +
+  scale_x_continuous(limits = c(-1.0, -10.0)) + 
+  axis_theme
+```
+
+```{r build-legends}
+# Create standalone legends to replicate the original layout structure
+legend_data_df <- tibble(
+  x = c(1, 2, 3, 4), y = c(1, 2, 3, 4),
+  Dataset = c("With Salvia", "Without Salvia", "With Salvia", "Without Salvia"),
+  Significance = c("p < 0.05", "p >= 0.05", "p < 0.05", "p >= 0.05")
+)
+
+leg_dataset <- get_legend(
+  ggplot(legend_data_df, aes(x, y, linetype = Dataset)) +
+    geom_line(aes(color = Dataset), linewidth = 1.0) +
+    scale_linetype_manual(values = c("With Salvia" = "dashed", "Without Salvia" = "solid")) +
+    scale_color_manual(values = c("With Salvia" = "grey50", "Without Salvia" = "black")) +
+    theme_minimal(base_size = 13) + 
+    theme(legend.title = element_text(face = "bold"), legend.text = element_text(size = 11))
+)
+
+# Legend updated to show p >= 0.05 as dashed line
+leg_sig <- get_legend(
+  ggplot(legend_data_df, aes(x, y, linetype = Significance)) +
+    geom_line(color = "#2b5cff", linewidth = 1.0) +
+    scale_linetype_manual(values = c("p < 0.05" = "solid", "p >= 0.05" = "dashed")) +
+    theme_minimal(base_size = 13) + 
+    theme(legend.title = element_text(face = "bold"), legend.text = element_text(size = 11))
+)
+
+leg_species <- get_legend(
+  fig5a + guides(color = guide_legend(ncol = 1, title = "Species")) +
+    theme_minimal(base_size = 13) +
+    theme(legend.title = element_text(face = "bold"), legend.text = element_text(size = 10.5))
+)
+
+# Bundle right-side legends cleanly
+right_legends <- plot_grid(
+  leg_dataset,
+  leg_species,
+  leg_sig,
+  ncol = 1, align = "v", rel_heights = c(0.18, 0.72, 0.1)
+)
+```
+
+```{r combine-and-save}
+# Combine the vertical layout panel stack
+plots_stacked <- plot_grid(
+  fig5a + theme(legend.position = "none", axis.title.x = element_blank()),
+  fig5b + theme(legend.position = "none"),
+  ncol = 1,
+  labels = c("A", "B"),
+  label_fontface = "bold", label_size = 16,
+  label_x = 0.03, label_y = 0.97,
+  hjust = 0, vjust = 1
+)
+
+# Bind structural panels and legends
+final_figure <- plot_grid(plots_stacked, right_legends, nrow = 1, rel_widths = c(1, 0.38))
+final_figure
+
+# Smaller overall figure constraints to force the typography pop
+ggsave(
+  plot = final_figure,
+  filename = here::here("output", "figures", "main", "Fig_08_P50_vs_params.jpg"),
+  dpi = 600,
+  width = 6.5,
+  height = 7.5
+)
+```
+
+```{r species-level-stats}
+# ==========================================================================
+# Run and extract stats on a species level
+# ==========================================================================
+
+# 1. Define species models
+models <- list(
+  "Panel A: With Salvia"    = lm(min_mwp ~ p50, data = q3_df),
+  "Panel A: Without Salvia" = lm(min_mwp ~ p50, data = q3_df_outs),
+  "Panel B: With Salvia"    = lm(min_lfm ~ p50, data = q3_df),
+  "Panel B: Without Salvia" = lm(min_lfm ~ p50, data = q3_df_outs)
+)
+
+# 2. Extract statistics cleanly into a summary table
+stats_summary <- map_df(names(models), function(name) {
+  fit <- models[[name]]
+  coefs <- summary(fit)$coefficients
+  
+  tibble(
+    Analysis       = name,
+    Intercept      = round(coefs[1, 1], 3),
+    Slope          = round(coefs[2, 1], 3),
+    R_squared      = round(summary(fit)$r.squared, 3),
+    p_value        = signif(coefs[2, 4], 3),
+    N              = nobs(fit),
+    df_residual    = fit$df.residual
+  )
+})
+
+# Print table to console
+print(stats_summary)
+```

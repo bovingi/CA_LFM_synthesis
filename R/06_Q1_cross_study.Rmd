@@ -1,0 +1,123 @@
+---
+title: "Q1: Differences Across Studies"
+author: "Indra Boving"
+date: "2024-04-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+rm(list = ls())
+
+library(tidyverse)
+library(here)
+library(janitor)
+library(broom)
+source(here("R", "00_figure_setup.R"))
+```
+
+# Load and Prep Data
+```{r data-prep}
+df <- read_csv(here("data", "all-data-combined.csv")) %>%
+  clean_names() %>%
+  mutate(ilfm = 1 / lfm)
+
+df_multi_study <- df %>%
+  filter(species %in% c("ADEFAS", "HETARB", "QUEAGR", "QUEDOU", "QUEKEL"))
+```
+
+# Statistical Testing: Slopes and Intercepts Across Studies
+```{r interaction-tests}
+interaction_results <- df_multi_study %>%
+  group_by(species) %>%
+  group_modify(~ {
+    model <- lm(ilfm ~ mwp * sp_site, data = .x)
+    anova_res <- anova(model)
+    row_idx <- which(rownames(anova_res) == "mwp:sp_site")
+    interaction_p <- if(length(row_idx) > 0) anova_res[["Pr(>F)"]][row_idx] else NA
+    tibble(interaction_p = interaction_p)
+  }) %>%
+  mutate(sig_interaction = interaction_p < 0.05)
+
+df_plot <- df_multi_study %>%
+  left_join(interaction_results, by = "species")
+```
+
+# Extract Statistics for Reporting
+```{r study-effects-stats}
+stats_summary <- df_multi_study %>%
+  group_by(species) %>%
+  group_modify(~ {
+    model <- lm(ilfm ~ mwp * sp_site, data = .x)
+    anova(model) %>%
+      broom::tidy() %>%
+      filter(term != "Residuals")
+  }) %>%
+  ungroup() %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+print(stats_summary)
+write_csv(stats_summary, here("output", "tables", "Table_S05_study_effects.csv"))
+```
+
+# Create Annotations for the Figure
+```{r annotation-prep}
+star_df <- df_plot %>%
+  group_by(species) %>%
+  summarise(
+    sig = any(sig_interaction, na.rm = TRUE),
+    x_pos = max(mwp, na.rm = TRUE),
+    y_pos = max(ilfm, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    star = ifelse(sig, "Sig. site effect", "No sig. site effect"),
+    x_pos = x_pos - 0.03 * (x_pos - min(df_plot$mwp, na.rm = TRUE)),
+    y_pos = y_pos - 0.03 * (y_pos - min(df_plot$ilfm, na.rm = TRUE))
+  )
+```
+
+# Plot Differences Across Studies
+```{r plot-differences, fig.width=9, fig.height=5}
+figSX_studydiffs <- ggplot(df_plot, aes(x = mwp, y = ilfm, color = study, group = sp_site)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.7) +
+  geom_text(
+    data = star_df,
+    aes(x = x_pos, y = y_pos, label = star),
+    inherit.aes = FALSE,
+    hjust = 1, vjust = 1,
+    size = 3.5,
+    color = "black"
+  ) +
+  facet_wrap(~ species, scales = "free") +
+  labs(
+    x = "Minimum Water Potential (MPa)",
+    y = "1/LFM",
+    color = "Site"
+  ) +
+  scale_color_manual(values = c(
+    "Pepperwood" = "#009E73",
+    "StuntRanch" = "#E69F00",
+    "SEKI"       = "#56B4E9",
+    "Sedgwick"   = "#D55E00"
+  )) +
+  theme(
+    legend.position = c(0.85, 0.25),
+    strip.text = element_text(face = "bold", size = 12),
+    axis.title = element_text(size = 12)
+  )
+
+figSX_studydiffs
+```
+
+# Save Output Figure
+```{r save-fig}
+ggsave(
+  plot = figSX_studydiffs,
+  filename = here("output", "figures", "main", "Fig_05_study_differences.jpg"),
+  dpi = 600,
+  width = 9,
+  height = 5
+)
+```

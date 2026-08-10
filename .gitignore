@@ -21,6 +21,9 @@ data/concept_df.csv
 data/q3_df.csv
 data/q4_df.csv
 
+# Manuscript drafts (not for version control)
+ignored_docs/
+
 # System
 .DS_Store
 Rplots.pdf

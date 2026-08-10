@@ -287,8 +287,8 @@ df_mod <- df %>%
 # 2. Frequentist Framework (lmer)
 # ---------------------------------------------------------
 freq_mod <- lmer(
-  ilfm ~  mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * p50_z + mwp_z * tlp_z+ (1 | species), 
-  data = df_mod, 
+  ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (1 | species),
+  data = df_mod,
   REML = TRUE
 )
 
@@ -312,9 +312,9 @@ for(sp in species_list) {
   test_data <- df_mod %>% filter(species == sp)
   
   temp_mod <- lmer(
-    ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * p50_z + mwp_z * tlp_z +(1 | species), 
+    ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (1 | species),
     data = train_data,
-    REML = FALSE 
+    REML = FALSE
   )
   
   preds <- predict(temp_mod, newdata = test_data, allow.new.levels = TRUE)
@@ -732,5 +732,199 @@ ggsave(
 )
 ```
 
+## ITV Sensitivity Analysis
+Does intraspecific trait variation (ITV) explain which species the model predicts poorly?
+If species with high trait CV have larger cross-val residuals, ITV is likely masking the
+trait-iLFM signal. If not, the Ψ-iLFM relationship is likely genuinely conserved within
+angiosperms regardless of trait variation.
 
+```{r itv_sensitivity}
+library(tidyverse)
+library(here)
 
+spcodes <- read_csv(here("data", "SpCodes.csv"))
+
+# --- 1. Per-species mean absolute cross-val residual (from angio fig chunk above) ---
+sp_residuals <- df_mod %>%
+  mutate(abs_resid = abs(ilfm - cv_predicted_ilfm)) %>%
+  group_by(species) %>%
+  summarise(mean_abs_resid = mean(abs_resid, na.rm = TRUE), .groups = "drop") %>%
+  left_join(spcodes %>% select(SpCode6, Genus_species), by = c("species" = "SpCode6"))
+
+# --- 2. SLA CV from raw TRY data ---
+# NOTE: requires try_all_20241014.csv (not in repo). If unavailable, SLA CV is skipped.
+try_path <- "/Users/user/Desktop/github/older projects/pepperwood/data/try_all_20241014.csv"
+
+sla_names <- c("SLA", "SLA (cm2 g-1)", "SLA  (cm2/g)", "SLA(cm2/g)",
+                "sla", "SLA: petiole and rachis excluded",
+                "Specific leaf area", "Specific Leaf Area",
+                "leaf area per leaf mass (SLA)")
+
+if (file.exists(try_path)) {
+  sla_cv <- read.csv(try_path) %>%
+    filter(OriglName %in% sla_names, !is.na(StdValue), StdValue > 0) %>%
+    mutate(Genus_species = word(AccSpeciesName, 1, 2)) %>%
+    group_by(Genus_species) %>%
+    summarise(sla_cv = sd(StdValue, na.rm = TRUE) / mean(StdValue, na.rm = TRUE),
+              sla_n  = n(), .groups = "drop") %>%
+    filter(sla_n >= 3)
+} else {
+  message("Raw TRY file not found; SLA CV omitted from ITV analysis.")
+  sla_cv <- tibble(Genus_species = character(), sla_cv = numeric(), sla_n = integer())
+}
+
+# --- 3. Load pre-computed LDMC and P50 CVs (from TRY, stored in repo) ---
+try_cvs <- read_csv(here("data", "other_studies", "try-cvs.csv")) %>%
+  rename(Genus_species = 1) %>%
+  select(Genus_species, ldmc_cv = LDMC, p50_cv = `P50..MPa.`) %>%
+  mutate(across(c(ldmc_cv, p50_cv), abs))
+
+# --- 4. Join residuals with CVs ---
+itv_df <- sp_residuals %>%
+  left_join(sla_cv  %>% select(Genus_species, sla_cv),  by = "Genus_species") %>%
+  left_join(try_cvs,                                     by = "Genus_species")
+
+# --- 5. Spearman correlations ---
+cor_sla  <- cor.test(itv_df$mean_abs_resid, itv_df$sla_cv,  method = "spearman", use = "complete.obs")
+cor_ldmc <- cor.test(itv_df$mean_abs_resid, itv_df$ldmc_cv, method = "spearman", use = "complete.obs")
+cor_p50  <- cor.test(itv_df$mean_abs_resid, itv_df$p50_cv,  method = "spearman", use = "complete.obs")
+
+cat("SLA CV  vs residual: rho =", round(cor_sla$estimate,  2), "  p =", round(cor_sla$p.value,  3), "\n")
+cat("LDMC CV vs residual: rho =", round(cor_ldmc$estimate, 2), "  p =", round(cor_ldmc$p.value, 3), "\n")
+cat("P50 CV  vs residual: rho =", round(cor_p50$estimate,  2), "  p =", round(cor_p50$p.value,  3), "\n")
+
+# --- 6. Plot ---
+itv_long <- itv_df %>%
+  pivot_longer(cols = c(sla_cv, ldmc_cv, p50_cv),
+               names_to = "trait", values_to = "cv") %>%
+  filter(!is.na(cv)) %>%
+  mutate(trait = recode(trait,
+    "sla_cv"  = "SLA",
+    "ldmc_cv" = "LDMC",
+    "p50_cv"  = "P50"
+  ))
+
+ggplot(itv_long, aes(x = cv, y = mean_abs_resid)) +
+  geom_point(alpha = 0.7, size = 2.5) +
+  geom_smooth(method = "lm", se = TRUE, color = "#2C7FB8", linewidth = 1) +
+  geom_text(aes(label = species), size = 2.5, vjust = -0.6, alpha = 0.6) +
+  facet_wrap(~ trait, scales = "free_x") +
+  labs(
+    x = "Trait CV (intraspecific SD / mean, from TRY)",
+    y = "Mean absolute cross-val residual (iLFM)",
+    title = "ITV sensitivity: does trait variability predict model error?"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(strip.background = element_blank(), strip.text = element_text(face = "bold"))
+```
+
+## Supplemental Equations for Vegetation Modelers (Angiosperms Only)
+
+Two equations for use by modelers without site-specific calibration data.
+Conifers are excluded: gymnosperm ψ–LFM dynamics differ fundamentally (positive
+slopes in this dataset) and sample size (n = 2) is insufficient for a valid trait equation.
+
+### Equation 1: Real-time LFM (requires contemporaneous ψ)
+
+Best angiosperm model from Table S7 (SLA + LDMC × Ψ).
+
+```{r supp_eq1_realtime_lfm}
+library(lme4)
+library(lmerTest)
+
+df_angio <- df_mod %>%
+  filter(functional_type == "angiosperm")
+
+# Refit best angiosperm model (SLA + LDMC, from Table_S07_model_comparison_angiosperms)
+mod_eq1 <- lmer(
+  ilfm ~ mwp_z + mwp_z:sla_z + mwp_z:ldmc_z + (1 | species),
+  data = df_angio,
+  REML = TRUE
+)
+
+# Fixed-effect coefficients
+cat("=== Supplemental Equation 1: Real-Time iLFM (Angiosperms) ===\n")
+cat("iLFM = β0 + β1·Ψz + β2·(Ψz × SLAz) + β3·(Ψz × LDMCz) + u_s\n")
+cat("  where _z = z-standardized, u_s = species random intercept (0 for novel species)\n\n")
+
+coefs_eq1 <- round(fixef(mod_eq1), 4)
+print(coefs_eq1)
+
+# Standardization parameters — modelers must apply these to their raw values
+std_params <- df_angio %>%
+  summarise(
+    mwp_mean  = round(mean(mwp,  na.rm = TRUE), 4), mwp_sd  = round(sd(mwp,  na.rm = TRUE), 4),
+    sla_mean  = round(mean(sla,  na.rm = TRUE), 4), sla_sd  = round(sd(sla,  na.rm = TRUE), 4),
+    ldmc_mean = round(mean(ldmc, na.rm = TRUE), 4), ldmc_sd = round(sd(ldmc, na.rm = TRUE), 4)
+  )
+
+cat("\nStandardization parameters (x_z = (x - mean) / sd):\n")
+print(t(std_params))
+
+cat("\nConvert iLFM back to LFM (%): LFM = (1 / iLFM) × 100\n")
+
+# Model performance
+cv_pred_eq1 <- rep(NA, nrow(df_angio))
+for (sp in unique(df_angio$species)) {
+  train <- df_angio %>% filter(species != sp)
+  test  <- df_angio %>% filter(species == sp)
+  m_cv  <- lmer(ilfm ~ mwp_z + mwp_z:sla_z + mwp_z:ldmc_z + (1 | species),
+                data = train, REML = FALSE)
+  cv_pred_eq1[df_angio$species == sp] <- predict(m_cv, newdata = test,
+                                                   allow.new.levels = TRUE)
+}
+r2_eq1 <- cor(df_angio$ilfm, cv_pred_eq1, use = "complete.obs")^2
+cat(sprintf("\nCross-val R² (LOSO, angiosperms): %.3f\n", r2_eq1))
+```
+
+### Equation 2: LFMmin (trait-only, no contemporaneous ψ required)
+
+Species-level regression of minimum seasonal LFM on functional traits.
+Modelers supply only trait values from a database; no real-time measurements needed.
+
+```{r supp_eq2_lfmmin}
+# Species-level data (one row per angiosperm species)
+angio_sp <- q3_df %>%
+  filter(functional_type == "angiosperm",
+         !is.na(min_lfm), !is.na(plc50_stem), !is.na(sla), !is.na(ldmc), !is.na(psi_tlp)) %>%
+  mutate(min_lfm_pct = min_lfm * 100)  # convert to % for interpretability
+
+cat(sprintf("Angiosperms with complete trait data: n = %d species\n\n", nrow(angio_sp)))
+
+# Full model: all four traits
+mod_eq2_full <- lm(min_lfm_pct ~ plc50_stem + psi_tlp + sla + ldmc, data = angio_sp)
+cat("=== Full trait model (LFMmin ~ P50 + TLP + SLA + LDMC) ===\n")
+print(summary(mod_eq2_full))
+
+# Reduced model: P50 only (most ecologically interpretable, Q3 established this relationship)
+mod_eq2_p50 <- lm(min_lfm_pct ~ plc50_stem, data = angio_sp)
+cat("\n=== P50-only model ===\n")
+print(summary(mod_eq2_p50))
+
+# Report AIC for comparison
+cat(sprintf("\nAIC full model: %.1f\nAIC P50-only:   %.1f\n",
+            AIC(mod_eq2_full), AIC(mod_eq2_p50)))
+
+# Format final equation coefficients for manuscript
+cat("\n=== Supplemental Equation 2: LFMmin (%) ===\n")
+b <- round(coef(mod_eq2_full), 3)
+cat(sprintf("LFMmin = %.3f + %.3f·P50 + %.3f·TLP + %.3f·SLA + %.3f·LDMC\n",
+            b["(Intercept)"], b["plc50_stem"], b["psi_tlp"], b["sla"], b["ldmc"]))
+cat("  P50 and TLP in MPa; SLA in cm² g⁻¹; LDMC as proportion (g g⁻¹)\n")
+cat("  Applies to angiosperms only\n")
+
+# Plot: observed vs. predicted LFMmin
+angio_sp$lfmmin_pred <- predict(mod_eq2_full)
+
+ggplot(angio_sp, aes(x = lfmmin_pred, y = min_lfm_pct)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_text(aes(label = sp_code), size = 2.8, vjust = -0.7, alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray40") +
+  geom_smooth(method = "lm", se = TRUE, color = "#2C7FB8", linewidth = 1) +
+  labs(
+    x = "Predicted LFMmin (%) — trait-based equation",
+    y = "Observed LFMmin (%)",
+    title = "Supplemental Equation 2: LFMmin from traits only (angiosperms)"
+  ) +
+  theme_classic(base_size = 13)
+```

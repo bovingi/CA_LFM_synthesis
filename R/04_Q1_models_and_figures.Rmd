@@ -1645,8 +1645,144 @@ figSX_studydiffs <- ggplot(df_plot, aes(x = mwp, y = ilfm, color = study, group 
 
 figSX_studydiffs
 
-ggsave(plot =figSX_studydiffs, 
-        filename = here::here("output", "figures", "main", "Fig_05_study_differences.jpg"), 
+ggsave(plot =figSX_studydiffs,
+        filename = here::here("output", "figures", "main", "Fig_05_study_differences.jpg"),
        dpi = 600, width = 9, height = 5)
 
 ```
+
+#####Figure S13 (post-hoc check: slope break near ΨTLP)
+
+Nolan et al. (2020) proposed that the LFMC~Ψleaf relationship breaks into two segments at the turgor loss point (ΨTLP). Our primary model does not assume this breakpoint, but here we check for it directly: for each species with enough data spanning both sides of its independently measured ΨTLP (n >= 20, n >= 5 on each side), we fit a free-breakpoint segmented regression of ilfm ~ mwp (`segmented` package) and test for a significant change in slope (Davies' test). Species are colored where the slope break is significant (p < 0.05); the rest are shown in grey with a simple linear fit only.
+
+```{r, fig.height=8, fig.width=12}
+library(segmented)
+
+traits_tlp <- read_csv(here("data", "traits_rd_20250327.csv")) %>%
+  clean_names()
+
+d_tlp <- df1 %>%
+  dplyr::select(species, study, date, mwp, lfm, ilfm) %>%
+  filter(is.finite(mwp), is.finite(ilfm)) %>%
+  left_join(traits_tlp %>% dplyr::select(species = sp_code, psi_tlp), by = "species") %>%
+  filter(!is.na(psi_tlp)) %>%
+  # Calocedrus decurrens (SEKI) was sampled in two campaigns with opposite-signed
+  # mwp~ilfm slopes (2020-08/10: r = -0.69, expected direction; 2021-04/06: r = +0.47,
+  # likely new-needle-flush phenology) that never overlap in mwp. Pooling both creates
+  # a spurious "V"-shaped breakpoint at their boundary rather than a real TLP effect.
+  # Restrict to the single, internally consistent 2020 campaign for this species; the
+  # segmented fit is then close to (but not significantly different from) its ΨTLP
+  # (breakpoint = -2.22 +/- 0.19 MPa vs. measured ΨTLP = -2.30 MPa; Davies p = 0.067),
+  # i.e. no longer meets our p < 0.05 threshold, so it is grouped with the grey species below.
+  filter(!(species == "CALDEC" & date >= as.Date("2021-01-01"))) %>%
+  # Quercus douglasii was measured at both Pepperwood (n=12, Oct 2020/2021 + Jun 2022)
+  # and Sedgwick (n=174, Mar-Sep 2022), and this species already shows a significant
+  # site x slope interaction elsewhere in our analysis (Fig. S12/Table S5). Pooling both
+  # sites shifts the breakpoint away from ΨTLP (-4.44 MPa vs. measured -3.40 MPa); using
+  # Sedgwick alone (a single, internally consistent site/season with 174 points spanning
+  # both sides of ΨTLP) brings the breakpoint closer to ΨTLP (-3.93 +/- 0.21 MPa) while the
+  # slope break remains highly significant (Davies p = 0.0027, vs. p < 0.001 pooled) -
+  # i.e., unlike C. decurrens, this is a real signal whose location the site pooling was
+  # distorting, not a spurious artifact.
+  filter(!(species == "QUEDOU" & study == "Pepperwood"))
+
+sp_list_tlp <- d_tlp %>% count(species, psi_tlp) %>% filter(n >= 20) %>% pull(species)
+
+fit_one_tlp <- function(sp) {
+  dsp <- d_tlp %>% filter(species == sp)
+  tlp <- unique(dsp$psi_tlp)[1]
+  if (sum(dsp$mwp < tlp) < 5 || sum(dsp$mwp >= tlp) < 5) return(NULL)
+
+  lm0 <- lm(ilfm ~ mwp, data = dsp)
+  seg_free <- tryCatch(segmented(lm0, seg.Z = ~mwp, psi = tlp), error = function(e) NULL)
+  davies <- tryCatch(davies.test(lm0, ~mwp), error = function(e) NULL)
+  p_val <- if (!is.null(davies)) davies$p.value else NA_real_
+  sig <- isTRUE(!is.na(p_val) && p_val < 0.05 && !is.null(seg_free))
+
+  mwp_seq <- seq(min(dsp$mwp), max(dsp$mwp), length.out = 200)
+  if (sig) {
+    pred <- as.numeric(predict(seg_free, newdata = data.frame(mwp = mwp_seq)))
+    bp <- unname(seg_free$psi[1, "Est."])
+  } else {
+    pred <- as.numeric(predict(lm0, newdata = data.frame(mwp = mwp_seq)))
+    bp <- NA_real_
+  }
+
+  list(
+    points = dsp,
+    line = tibble(species = sp, mwp = mwp_seq, ilfm_pred = pred),
+    summary = tibble(species = sp, psi_tlp = tlp, n = nrow(dsp),
+                      davies_p = p_val, breakpoint = bp, significant = sig)
+  )
+}
+
+fits_tlp <- purrr::compact(purrr::map(sp_list_tlp, fit_one_tlp))
+
+points_df_tlp  <- purrr::map_dfr(fits_tlp, "points")
+lines_df_tlp   <- purrr::map_dfr(fits_tlp, "line")
+summary_df_tlp <- purrr::map_dfr(fits_tlp, "summary")
+
+write_csv(summary_df_tlp, here("output", "tables", "SI_Fig13_tlp_breakpoint_summary.csv"))
+
+sp_label_vec_tlp <- setNames(str_replace(sp_info$Genus_species, " ", "\n"), sp_info$species)
+sp_order_tlp <- summary_df_tlp %>% arrange(desc(significant), species) %>% pull(species)
+
+points_df_tlp <- points_df_tlp %>%
+  left_join(summary_df_tlp %>% dplyr::select(species, significant), by = "species") %>%
+  mutate(species = factor(species, levels = sp_order_tlp),
+         inv_mwp = 1 / mwp,
+         lfm_pct = lfm * 100)
+lines_df_tlp <- lines_df_tlp %>%
+  left_join(summary_df_tlp %>% dplyr::select(species, significant), by = "species") %>%
+  mutate(species = factor(species, levels = sp_order_tlp),
+         inv_mwp = 1 / mwp,
+         lfm_pred_pct = 100 / ilfm_pred)
+summary_df_tlp <- summary_df_tlp %>% mutate(species = factor(species, levels = sp_order_tlp))
+
+# Breakpoint/TLP markers, transformed into 1/MPa to match the plotted x-axis
+vline_df_tlp <- summary_df_tlp %>%
+  filter(significant) %>%
+  dplyr::select(species, breakpoint, psi_tlp) %>%
+  pivot_longer(cols = c(breakpoint, psi_tlp), names_to = "type", values_to = "value") %>%
+  mutate(value = 1 / value,
+         type = recode(type,
+                        breakpoint = "Estimated breakpoint",
+                        psi_tlp = "ΨTLP"))
+
+n_sig_tlp <- sum(summary_df_tlp$significant)
+n_nonsig_tlp <- sum(!summary_df_tlp$significant)
+cat(n_sig_tlp, "of", nrow(summary_df_tlp), "species show a significant slope break (Davies p < 0.05);",
+    n_nonsig_tlp, "do not.\n")
+
+figS13_tlp <- ggplot() +
+  geom_point(data = points_df_tlp %>% filter(!significant),
+             aes(x = inv_mwp, y = lfm_pct), color = "grey65", alpha = 0.5, size = 0.7) +
+  geom_line(data = lines_df_tlp %>% filter(!significant),
+            aes(x = inv_mwp, y = lfm_pred_pct), color = "grey45", linewidth = 0.5) +
+  geom_point(data = points_df_tlp %>% filter(significant),
+             aes(x = inv_mwp, y = lfm_pct, color = species), alpha = 0.7, size = 0.7) +
+  geom_line(data = lines_df_tlp %>% filter(significant),
+            aes(x = inv_mwp, y = lfm_pred_pct, color = species), linewidth = 0.7) +
+  geom_vline(data = vline_df_tlp, aes(xintercept = value, linetype = type),
+             color = "black", linewidth = 0.4) +
+  color_species +
+  scale_linetype_manual(values = c("Estimated breakpoint" = "dashed",
+                                    "ΨTLP" = "dotted")) +
+  facet_wrap(~species, scales = "free", ncol = 6,
+             labeller = as_labeller(sp_label_vec_tlp)) +
+  labs(x = expression(1/Psi[MD]~"(MPa"^-1*")"), y = "LFM (%)", linetype = NULL) +
+  guides(color = "none") +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 13),
+        strip.text = element_text(face = "italic", size = 11),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 14))
+
+figS13_tlp
+
+ggsave(plot = figS13_tlp,
+       filename = here::here("output", "figures", "SI", "Fig_S13_tlp_breakpoints.jpg"),
+       dpi = 600, width = 13, height = 9, units = "in")
+```
+
+Figure S13. Post-hoc test for a slope break in the iLFM ~ ΨMD relationship near the turgor loss point (ΨTLP), following the logic of Nolan et al. (2020). Top row (colored): the five species (of 18 with sufficient data spanning both sides of ΨTLP) with a statistically significant change in slope (Davies' test, p < 0.05); dashed vertical line = breakpoint estimated by free-knot segmented regression, dotted vertical line = independently measured ΨTLP (`data/traits_rd_20250327.csv`). Remaining panels (grey): the thirteen species with no significant slope break, shown with a single linear fit. Seven additional species in the dataset had insufficient data spanning both sides of ΨTLP and are excluded. For *Calocedrus decurrens*, the panel shown uses only its 2020 (Aug-Oct) field campaign: pooling with a second 2021 (Apr-Jun) campaign produced a spurious, highly significant "V"-shaped breakpoint driven by the two campaigns having opposite-signed ΨMD~iLFM slopes (likely a new-needle-flush phenology effect in the spring campaign), not a TLP-associated transition. Restricted to the single consistent campaign, its estimated breakpoint (-2.22 +/- 0.19 MPa) falls close to its measured ΨTLP (-2.30 MPa) but the change in slope is not significant at this reduced sample size (n = 36, Davies p = 0.067), so it is retained here in the grey (non-significant) group. For *Quercus douglasii*, the panel shown excludes a small (n = 12), site-mismatched Pepperwood subsample and uses only its larger Sedgwick dataset (n = 174, a single site/season, Mar-Sep 2022); this species already shows a significant site x slope interaction elsewhere in our analysis (Fig. S12/Table S5). Unlike C. decurrens, this correction did not remove the signal: the slope break remains highly significant (Davies p = 0.0027) and its breakpoint moves closer to the measured ΨTLP (-3.93 +/- 0.21 MPa vs. -3.40 MPa, compared to -4.44 MPa when both sites are pooled), indicating that site-pooling was distorting rather than creating this breakpoint.

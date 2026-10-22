@@ -18,12 +18,17 @@ Question: Across species, what are the contributions of initial LFM and minimum 
 
 
 ```{r, data_load}
-concept_params_df <- read_csv(here::here("data", "concept_df.csv")) %>% 
-  clean_names() %>% 
-  group_by(species) %>% 
+# Psi-min: EVT estimate (0.99 quantile, floored at the lowest reading) from script 04;
+# lowest observed value for species with too few tail points
+psi_min_df <- read_csv(here::here("data", "psi_min_by_species.csv")) %>%
+  select(species, minwp = psi_min)
+
+concept_params_df <- read_csv(here::here("data", "concept_df.csv")) %>%
+  clean_names() %>%
+  left_join(psi_min_df, by = "species") %>%
+  group_by(species) %>%
   mutate(minlfm = min(lfm, na.rm = T),
          maxlfm = max(lfm, na.rm = T),
-         minwp = min(mwp, na.rm = T), 
          maxwp = max(mwp, na.rm = T),
          minilfm = 1/minlfm, 
          intercept_lfm = 1/intercept,
@@ -39,7 +44,7 @@ SpCodes <- read_csv(here("data", "SpCodes.csv")) %>%
   mutate(family = familyMatch(splist = c(Genus), taxon = "plant")$family)
 ```
 
-#Figure 7*:
+#Figure 6*:
 
 ```{r}
 make_lm_plot <- function(df, xvar, yvar, xlab, ylab,
@@ -73,7 +78,7 @@ make_lm_plot <- function(df, xvar, yvar, xlab, ylab,
    scale_shape_manual(
   values = c(
     "Angiosperm" = 16,  # filled circle
-    "Conifer" = 17   # filled triangle
+    "Gymnosperm" = 17   # filled triangle
   )
 ) +
     labs(x = xlab, 
@@ -99,7 +104,7 @@ df_plot <- concept_params_df %>%
   distinct(species, .keep_all = TRUE) %>%
   mutate(
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer",
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm",
       TRUE ~ as.character("Angiosperm")))
     
 
@@ -111,7 +116,7 @@ fig4f_yminlfm <- make_lm_plot(
   df_plot,
   xvar = "minwp",
   yvar = "minlfm",
-  xlab = expression(Psi[MDmin]~"(MPa)"),
+  xlab = expression(Psi[min]~"(MPa)"),
   ylab = "LFMmin (%)"
 ) +
   coord_cartesian(ylim = ylims_minlfm)
@@ -167,7 +172,7 @@ plots_fig4a_final
 
 ggsave(
   plot = plots_fig4a_final,
-  filename = here::here("output", "figures", "main", "Fig_07_parameter_relationships.jpg"),
+  filename = here::here("output", "figures", "main", "Fig_06_parameter_relationships.jpg"),
   dpi = 600, 
   width = 7, 
   height = 3
@@ -301,10 +306,10 @@ model_params <- c("minlfm", "maxlfm", "intercept_lfm", "slope", "minwp")
 # ----------------------------
 nice_names <- c(
   minlfm       = "LFMmin",
-  maxlfm       = "LFMmax",
-  intercept_lfm = "Intercept (LFM)",
+  maxlfm       = "Max. observed LFM",
+  intercept_lfm = "LFMmax",
   slope         = "Slope",
-  minwp        = "Min Ψmd"
+  minwp        = "Ψmin"
 )
 
 # ----------------------------
@@ -402,7 +407,7 @@ plot_param_cor <- function(dat, outfile, method = "pearson") {
 # ----------------------------
 p_params_with <- plot_param_cor(
   dat = df_plot,
-  outfile = here("output", "figures", "SI", "Fig_S09_param_correlations.jpeg")
+  outfile = here("output", "figures", "SI", "unused_param_correlations.jpeg")
 )
 ```
 
@@ -424,10 +429,10 @@ model_params <- c("minlfm", "maxlfm", "intercept_lfm", "slope", "minwp")
 # ----------------------------
 nice_names <- c(
   minlfm        = "LFMmin",
-  maxlfm        = "LFMmax",
-  intercept_lfm = "Intercept (LFM)",
+  maxlfm        = "Max. observed LFM",
+  intercept_lfm = "LFMmax",
   slope         = "Slope",
-  minwp         = "Min Ψmd"
+  minwp         = "Ψmin"
 )
 
 # ----------------------------
@@ -527,7 +532,7 @@ plot_param_pairs <- function(dat, outfile, method = "pearson") {
 # ----------------------------
 p_params <- plot_param_pairs(
   dat = df_plot,
-  outfile = here("output", "figures", "SI", "Fig_S09b_param_pairs_scatter.jpeg")
+  outfile = here("output", "figures", "SI", "Fig_S09_param_pairs_scatter.jpeg")
 )
 
 ```
@@ -535,7 +540,7 @@ p_params <- plot_param_pairs(
 
 
 
-###Figure 6 (Isocline), points & labels
+###Figure 5 (Isocline), points & labels
 
 #####Species
 
@@ -589,7 +594,7 @@ color_species <- c(
   QUEKEL = "#af4f2f",
   SALLEU = "#d48f90",
   SALMEL = "#732f30",
-  UMBCAL = "#d8b847"
+  UMBCAL = "#46a39a"
 )
 
 # ----------------------------
@@ -650,7 +655,7 @@ make_MWPcrit <- function(thresh, ilfm_vec, slope) {
   out
 }
 
-MWPcrit_60 <- make_MWPcrit(0.62, ilfm.sat.vec, species_slope)
+MWPcrit_62 <- make_MWPcrit(0.62, ilfm.sat.vec, species_slope)
 MWPcrit_77 <- make_MWPcrit(0.77, ilfm.sat.vec, species_slope)
 MWPcrit_88 <- make_MWPcrit(0.88, ilfm.sat.vec.green, species_slope) # Uses green vector
 
@@ -658,7 +663,7 @@ MWPcrit_88 <- make_MWPcrit(0.88, ilfm.sat.vec.green, species_slope) # Uses green
 # Plot open
 # ----------------------------
 jpeg(
-  filename = here("output", "figures", "main", "Fig_06_isoclines.jpg"),
+  filename = here("output", "figures", "SI", "unused_isoclines_by_species.jpg"),
   width = 7,
   height = 4.5,
   units = "in",
@@ -672,11 +677,11 @@ par(mar = c(4, 4, 0.5, 7), mgp = c(2.2, 0.6, 0), xpd = TRUE)
 # Set up plot (axes only)
 # ----------------------------
 plot(
-  x = MWPcrit_60, y = lfm_pct,
+  x = MWPcrit_62, y = lfm_pct,
   xlim = c(-8, 0.2), ylim = c(0, 400),
   type = "n",
-  xlab = "Minimum Midday Water Potential (MPa)",
-  ylab = "LFM (%) @ Midday Water Potential = 0",
+  xlab = expression(Psi[min]~"(MPa)"),
+  ylab = expression(LFM[max]~"(%)"),
   yaxt = "n"
 )
 axis(2, at = seq(0, 400, 50), labels = seq(0, 400, 50), las = 1)
@@ -684,8 +689,8 @@ axis(2, at = seq(0, 400, 50), labels = seq(0, 400, 50), las = 1)
 # ----------------------------
 # Draw conceptual curves
 # ----------------------------
-lines(MWPcrit_60, lfm_pct, lwd = 1.5, col = "maroon")
-text(MWPcrit_60[1], lfm_pct[1],
+lines(MWPcrit_62, lfm_pct, lwd = 1.5, col = "maroon")
+text(MWPcrit_62[1], lfm_pct[1],
      labels = "62% LFM", pos = 3, col = "maroon", cex = 0.9)
 
 lines(MWPcrit_77, lfm_pct, lwd = 1.5, col = "goldenrod")
@@ -803,10 +808,7 @@ library(here)
 # ----------------------------
 # Leaf Habit color palette (named vector)
 # ----------------------------
-color_habit <- c(
-  "Dec"   = "#df8d71",  # Nice terracotta red for Deciduous
-  "Ever"  = "#1e5a46"   # Nice deep forest green for Evergreen
-)
+color_habit <- color_leaf_habit  # defined in 00_figure_setup.R
 
 # ----------------------------
 # Build spres from parameters
@@ -838,7 +840,7 @@ color_species <- c(
   HETARB = "#e69b00", MALLAU = "#f5bb50", PINJEF = "#ada43b", PSEMEN = "#355828",
   QUEAGR = "#5b859e", QUEBER = "#1e395f", QUEDOU = "#75884b", QUEDUR = "#1e5a46",
   QUEGAR = "#df8d71", QUEKEL = "#af4f2f", SALLEU = "#d48f90", SALMEL = "#732f30",
-  UMBCAL = "#d8b847"
+  UMBCAL = "#46a39a"
 )
 
 species_levels <- sort(unique(spres$SpCode6))
@@ -871,7 +873,7 @@ make_MWPcrit <- function(thresh, ilfm_vec, slope) {
   out
 }
 
-MWPcrit_60 <- make_MWPcrit(0.62, ilfm.sat.vec, species_slope)
+MWPcrit_62 <- make_MWPcrit(0.62, ilfm.sat.vec, species_slope)
 MWPcrit_77 <- make_MWPcrit(0.77, ilfm.sat.vec, species_slope)
 MWPcrit_88 <- make_MWPcrit(0.88, ilfm.sat.vec.green, species_slope) # Uses green vector
 
@@ -879,7 +881,7 @@ MWPcrit_88 <- make_MWPcrit(0.88, ilfm.sat.vec.green, species_slope) # Uses green
 # Plot open
 # ----------------------------
 jpeg(
-  filename = here("output", "figures", "main", "Fig_06_isoclines.jpg"),
+  filename = here("output", "figures", "SI", "unused_isoclines_by_leafhabit.jpg"),
   width = 7,
   height = 4.5,
   units = "in",
@@ -893,11 +895,11 @@ par(mar = c(4, 4, 0.5, 7), mgp = c(2.2, 0.6, 0), xpd = TRUE)
 # Set up plot (axes only)
 # ----------------------------
 plot(
-  x = MWPcrit_60, y = lfm_pct,
+  x = MWPcrit_62, y = lfm_pct,
   xlim = c(-8, 0.2), ylim = c(0, 400),
   type = "n",
-  xlab = "Minimum Midday Water Potential (MPa)",
-  ylab = "LFM (%) @ Midday Water Potential = 0",
+  xlab = expression(Psi[min]~"(MPa)"),
+  ylab = expression(LFM[max]~"(%)"),
   yaxt = "n"
 )
 axis(2, at = seq(0, 400, 50), labels = seq(0, 400, 50), las = 1)
@@ -905,8 +907,8 @@ axis(2, at = seq(0, 400, 50), labels = seq(0, 400, 50), las = 1)
 # ----------------------------
 # Draw conceptual curves
 # ----------------------------
-lines(MWPcrit_60, lfm_pct, lwd = 1.5, col = "maroon")
-text(MWPcrit_60[1], lfm_pct[1],
+lines(MWPcrit_62, lfm_pct, lwd = 1.5, col = "maroon")
+text(MWPcrit_62[1], lfm_pct[1],
      labels = "62% LFM", pos = 3, col = "maroon", cex = 0.9)
 
 lines(MWPcrit_77, lfm_pct, lwd = 1.5, col = "goldenrod")
@@ -987,9 +989,9 @@ legend(
   x = usr[2] + x_shift,
   y = usr[4],
   xjust = 1, yjust = 1,
-  legend = c("Deciduous", "Evergreen"), # Clear, publication-ready labels
+  legend = names(color_habit),
   pch = 16,
-  col = color_habit[c("Dec", "Ever")],
+  col = color_habit,
   bty = "n",
   cex = 0.8,
   title = "Leaf Habit"
@@ -1007,8 +1009,7 @@ dev.off()
 # Conceptual curves + species points (base R)
 #   - builds spres from concept_params_df
 #   - joins Genus from SpCodes
-#   - draws conceptual isoclines + species points colored by growth form
-#   - labels selected species (1 label per species)
+#   - draws conceptual isoclines + species points colored by leaf habit, shaped by plant type
 #   - writes a JPEG to /figures
 # ============================
 
@@ -1024,14 +1025,6 @@ library(here)
 # }
 
 # ----------------------------
-# Growth Form color palette (named vector)
-# ----------------------------
-color_growth <- c(
-  "tree"  = "#1e395f",  # Deep slate blue for trees
-  "shrub" = "#d8b847"   # Warm golden-yellow for shrubs
-)
-
-# ----------------------------
 # Build spres from parameters
 # ----------------------------
 spres <- concept_params_df %>%
@@ -1041,8 +1034,7 @@ spres <- concept_params_df %>%
     model1.int  = intercept,
     model1.slp  = slope,
     SpCode6     = species,
-    minWP       = minwp,
-    growth_form = growth_form  # Pulling growth form into our plotting dataframe
+    minWP       = minwp
   ) %>%
   left_join(SpCodes %>% select(SpCode6, Genus), by = "SpCode6")
 
@@ -1050,24 +1042,6 @@ if (any(is.na(spres$Genus))) {
   warning("Some SpCode6 have no Genus in SpCodes: ",
           paste(unique(spres$SpCode6[is.na(spres$Genus)]), collapse = ", "))
 }
-
-# ----------------------------
-# Species colors aligned to data (for text labels only)
-# ----------------------------
-color_species <- c(
-  ABICON = "#17154f", ADEFAS = "#2f357c", ARBMEN = "#6c5d9e", ARCGLA = "#9d9cd5",
-  ARCPAT = "#b0799a", CALDEC = "#59385c", CEACOR = "#f6b3b0", CEACUN = "#f6b3b0",
-  CEAPAR = "#b38711", CEASPI = "#e48171", CERBET = "#d8b847", ERIFAS = "#bf3729",
-  HETARB = "#e69b00", MALLAU = "#f5bb50", PINJEF = "#ada43b", PSEMEN = "#355828",
-  QUEAGR = "#5b859e", QUEBER = "#1e395f", QUEDOU = "#75884b", QUEDUR = "#1e5a46",
-  QUEGAR = "#df8d71", QUEKEL = "#af4f2f", SALLEU = "#d48f90", SALMEL = "#732f30",
-  UMBCAL = "#d8b847"
-)
-
-species_levels <- sort(unique(spres$SpCode6))
-species_cols <- color_species[species_levels]
-species_cols[is.na(species_cols)] <- "grey50"
-names(species_cols) <- species_levels
 
 # ----------------------------
 # Generate conceptual curves
@@ -1094,132 +1068,85 @@ make_MWPcrit <- function(thresh, ilfm_vec, slope) {
   out
 }
 
-MWPcrit_60 <- make_MWPcrit(0.62, ilfm.sat.vec, species_slope)
+MWPcrit_62 <- make_MWPcrit(0.62, ilfm.sat.vec, species_slope)
 MWPcrit_77 <- make_MWPcrit(0.77, ilfm.sat.vec, species_slope)
 MWPcrit_88 <- make_MWPcrit(0.88, ilfm.sat.vec.green, species_slope) # Uses green vector
 
 # ----------------------------
-# Plot open
+# Plot (ggplot)
 # ----------------------------
-jpeg(
-  filename = here("output", "figures", "main", "Fig_06_isoclines.jpg"),
-  width = 7,
-  height = 4.5,
-  units = "in",
-  res = 300
+curves_df <- bind_rows(
+  tibble(x = MWPcrit_62, y = lfm_pct,       thr = "62% LFM"),
+  tibble(x = MWPcrit_77, y = lfm_pct,       thr = "77% LFM"),
+  tibble(x = MWPcrit_88, y = lfm_pct_green, thr = "88% LFM")
 )
+# Greys (darkest = driest) so isoclines aren't confused with the leaf-habit point colors
+curve_cols <- c("62% LFM" = "black", "77% LFM" = "grey40", "88% LFM" = "grey65")
 
-op <- par(no.readonly = TRUE)
-par(mar = c(4, 4, 0.5, 7), mgp = c(2.2, 0.6, 0), xpd = TRUE)
-
-# ----------------------------
-# Set up plot (axes only)
-# ----------------------------
-plot(
-  x = MWPcrit_60, y = lfm_pct,
-  xlim = c(-8, 0.2), ylim = c(0, 400),
-  type = "n",
-  xlab = "Minimum Midday Water Potential (MPa)",
-  ylab = "LFM (%) @ Midday Water Potential = 0",
-  yaxt = "n"
-)
-axis(2, at = seq(0, 400, 50), labels = seq(0, 400, 50), las = 1)
-
-# ----------------------------
-# Draw conceptual curves
-# ----------------------------
-lines(MWPcrit_60, lfm_pct, lwd = 1.5, col = "maroon")
-text(MWPcrit_60[1], lfm_pct[1],
-     labels = "62% LFM", pos = 3, col = "maroon", cex = 0.9)
-
-lines(MWPcrit_77, lfm_pct, lwd = 1.5, col = "goldenrod")
-text(MWPcrit_77[1], lfm_pct[1],
-     labels = "77% LFM", pos = 3, col = "goldenrod", cex = 0.9)
-
-lines(MWPcrit_88, lfm_pct_green, lwd = 1.5, col = "forestgreen")
-text(MWPcrit_88[1], lfm_pct_green[1],
-     labels = "88% LFM", pos = 4, col = "forestgreen", cex = 0.9)
-
-# ----------------------------
-# Plot points (colored by growth form)
-# ----------------------------
-points(
-  x = spres$minWP,
-  y = (1 / spres$model1.int) * 100,
-  pch = 16,
-  cex = 1.1,
-  col = color_growth[spres$growth_form] # Mapping to growth form colors
-)
-
-# ----------------------------
-# Labels for selected species (one label per species)
-# ----------------------------
-label_spp <- c("PSEMEN", "UMBCAL", "ABCO", "PIJE", "PINJEF", "ABICON",
-               "CALDEC")
-
-special <- c("PIJE", "PINJEF", "CALDEC", "QUEKEL", "CEACOR")
-
-spres_lab <- spres %>%
-  filter(SpCode6 %in% label_spp) %>%
-  mutate(
-    x = minWP,
-    y = (1 / model1.int) * 100
-  ) %>%
-  group_by(SpCode6) %>%
+# Curve labels sit just above each curve's upper end, left-aligned so they stay inside
+# the panel, all at the same height
+curve_labs <- curves_df %>%
+  group_by(thr) %>%
   slice(1) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(y = y + 8)
 
-# right-side labels
-spres_lab_other <- spres_lab %>% filter(!SpCode6 %in% special)
-if (nrow(spres_lab_other) > 0) {
-  text(
-    x = spres_lab_other$x,
-    y = spres_lab_other$y,
-    labels = spres_lab_other$SpCode6,
-    pos = 4,
-    offset = 0.3,
-    cex = 0.75,
-    col = species_cols[spres_lab_other$SpCode6]
-  )
+pts <- spres %>%
+  distinct(SpCode6, .keep_all = TRUE) %>%
+  mutate(
+    x      = minWP,
+    y      = (1 / model1.int) * 100,
+    functional_type = if_else(functional_type == "gymnosperm", "Gymnosperm", "Angiosperm")
+  ) %>%
+  filter(is.finite(x), is.finite(y))
+
+# Fig 5b: same isoclines, but y = maximum observed LFM rather than LFMmax (1/intercept)
+pts_obs <- pts %>% mutate(y = maxlfm * 100)
+
+make_fig5 <- function(pts, ylab) {
+  ggplot() +
+    geom_line(data = curves_df, aes(x = x, y = y, group = thr),
+              colour = curve_cols[curves_df$thr], linewidth = 0.7) +
+    geom_text(data = curve_labs, aes(x = x, y = y, label = thr),
+              colour = curve_cols[curve_labs$thr], hjust = 0, vjust = 0, size = 3.6) +
+    geom_point(data = pts, aes(x = x, y = y, colour = dec_ever, shape = functional_type), size = 2.2) +
+    scale_colour_manual(values = color_leaf_habit, breaks = names(color_leaf_habit), name = "Leaf habit") +
+    scale_shape_manual(values = c("Angiosperm" = 16, "Gymnosperm" = 17), name = "Plant type") +
+    scale_x_continuous(limits = c(-8, 0.2), breaks = seq(-8, 0, 2), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0, 400), breaks = seq(0, 400, 50), expand = c(0, 0)) +
+    coord_cartesian(clip = "off") +
+    labs(x = expression(Psi[min]~"(MPa)"), y = ylab) +
+    theme_classic(base_size = 13) +
+    theme(
+      panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.8),
+      axis.text    = element_text(colour = "black"),
+      legend.key   = element_blank(),
+      # legend inside the empty upper-right corner of the panel
+      legend.position = "inside",
+      legend.position.inside = c(0.985, 0.98),
+      legend.justification = c(1, 1),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 10.5),
+      legend.text  = element_text(size = 9.5),
+      legend.key.size = unit(0.9, "lines"),
+      legend.spacing.y = unit(2, "pt")
+    )
 }
 
-# special labels above point
-spres_lab_special <- spres_lab %>% filter(SpCode6 %in% special)
-if (nrow(spres_lab_special) > 0) {
-  text(
-    x = spres_lab_special$x,
-    y = spres_lab_special$y,
-    labels = spres_lab_special$SpCode6,
-    pos = 3,
-    offset = 0.45,
-    adj = c(0.5, 0),
-    cex = 0.75,
-    col = species_cols[spres_lab_special$SpCode6]
-  )
-}
+fig5  <- make_fig5(pts,     expression(LFM[max]~"(%)"))
+fig5b <- make_fig5(pts_obs, "Max. observed LFM (%)")
 
-# ----------------------------
-# Legend (to the right, updated for Growth Form)
-# ----------------------------
-usr <- par("usr")   # c(xmin, xmax, ymin, ymax)
-pin <- par("pin")   # plot dimensions in inches
-x_per_inch <- diff(usr[1:2]) / pin[1]
-x_shift <- 0.9 * x_per_inch  # ~0.9 inch to the right
+fig5
+fig5b
 
-legend(
-  x = usr[2] + x_shift,
-  y = usr[4],
-  xjust = 1, yjust = 1,
-  legend = c("Tree", "Shrub"), # Capitalized, publication-ready labels
-  pch = 16,
-  col = color_growth[c("tree", "shrub")],
-  bty = "n",
-  cex = 0.8,
-  title = "Growth Form"
+ggsave(
+  filename = here("output", "figures", "main", "Fig_05_isoclines.jpg"),
+  plot = fig5, width = 7, height = 4.5, units = "in", dpi = 300
 )
-
-par(op)
-dev.off()
+ggsave(
+  filename = here("output", "figures", "SI", "Fig_S08_isoclines_observed_max.jpg"),
+  plot = fig5b, width = 7, height = 4.5, units = "in", dpi = 300
+)
 ```
 
 

@@ -215,8 +215,9 @@ df1 <- df %>%
     study %in% c("Sedgwick") ~ "SeR",
     study %in% c("SEKI") ~ "PrC",
     study %in% c("StuntRanch") ~ "StR"
-  )) %>% 
-  filter(!(study %in% c("SEKI") & tissue_age %in% c("old", "both")))
+  ))
+# SEKI keeps new, old and mixed tissue together: field fuels are a mix of current and
+# previous years' growth (see Discussion). A new-tissue-only filter was used Feb–Oct 2026.
 
 df1 %>% 
   write_csv(here("data", "df1.csv"))
@@ -245,7 +246,8 @@ dat <- df1 %>%
   filter(is.finite(mwp), is.finite(psi_abs), !is.na(species))
 
 # --- Settings you can tune ---
-psi_min_p <- 0.999      # extreme quantile for Psi-min (0.99 more stable than 0.999)
+psi_min_p <- 0.99       # extreme quantile for Psi-min. 0.999 extrapolated up to 1.9 MPa past the
+                        # data for species with ~30 obs and near-exponential tails (SALLEU, MALLAU)
 min_tail  <- 5        # minimum tail points required to use EVT
 pu_max    <- 0.95      # highest threshold prob
 pu_min    <- 0.80      # lowest threshold prob (drop if needed for more tail points)
@@ -305,7 +307,9 @@ fits <- u_tbl %>%
       if (any(!is.finite(c(..1, ..2, ..3, ..4))) || ..4 <= 0) return(NA_real_)
       pot_quantile(p = psi_min_p, u = ..1, p_u = ..2, xi = ..3, beta = ..4)
     }),
-    psi_min_evt = -psi_min_evt_abs,  # back to negative MPa
+    # back to negative MPa; never less negative than the lowest observed value
+    # (strongly bounded tails, e.g. ERIFAS xi = -1.4, can put the quantile inside the data)
+    psi_min_evt = pmin(-psi_min_evt_abs, psi_min_obs),
 
     use_evt = is.finite(psi_min_evt) & (k_tail >= min_tail),
     psi_min_hybrid = if_else(use_evt, psi_min_evt, psi_min_obs),
@@ -318,24 +322,69 @@ print(fits %>% arrange(psi_min_method, k_tail))
 
 write.csv(fits, here("output", "tables", "psi_min_by_species_hybrid.csv"), row.names = FALSE)
 
-# build x range for the plot
+# Psi-min used by all downstream analyses (scripts 07, 08)
+fits %>%
+  select(species, psi_min = psi_min_hybrid, psi_min_method, psi_min_obs) %>%
+  write_csv(here("data", "psi_min_by_species.csv"))
+
+# shared x/y range so the panel is square
+psi_lims <- range(c(fits$psi_min_obs, fits$psi_min_hybrid))
+
 figSX_evt_ests <- ggplot() +
-  geom_point(data = fits,aes(y = psi_min_hybrid, 
+  geom_abline() +
+  geom_point(data = fits,aes(y = psi_min_hybrid,
            x = psi_min_obs,
            shape = psi_min_method,
-           color = species, 
-           )) +
-  coord_equal() +
-  geom_abline()
+           color = species,
+           ), size = 4) +
+  coord_equal(xlim = psi_lims, ylim = psi_lims) +
+  color_species +
+  scale_shape_manual(values = c(EVT_POT_GPD = 16, Observed_min_lowN = 17),
+                     labels = c(EVT_POT_GPD = "EVT", Observed_min_lowN = "Observed (low n)")) +
+  labs(x = "Observed Ψmin (MPa)", y = "Estimated Ψmin (MPa)",
+       color = "Species", shape = "Method") +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(axis.title = element_text(size = 18),
+        axis.text = element_text(size = 15),
+        legend.title = element_text(size = 15),
+        legend.text = element_text(size = 13))
 
 figSX_evt_ests
 
-ggsave(plot = figSX_evt_ests, here::here("output", "figures", "SI", "Fig_S05_evt_psi_min.jpg"), dpi = 600, 
-       height = 6, 
-       width = 6, units = "in")
+ggsave(plot = figSX_evt_ests, here::here("output", "figures", "SI", "Fig_S05_evt_psi_min.jpg"), dpi = 600,
+       height = 6,
+       width = 8.5, units = "in")
 ```
 
-#Table 1(dataset summary)
+#Figure S4 (Ψ distributions by species and study)
+
+```{r}
+# Stacked histograms of midday Ψ per species, filled by study (SEKI shown as Providence Creek)
+site_cols <- c("Pepperwood" = "#E69F00", "Providence Creek" = "#56B4E9",
+               "Sedgwick" = "#009E73", "Stunt Ranch" = "#CC79A7")  # Okabe-Ito
+
+figS4_psi_dist <- df1 %>%
+  mutate(site = recode(study, SEKI = "Providence Creek", StuntRanch = "Stunt Ranch"),
+         site = factor(site, levels = names(site_cols))) %>%
+  ggplot(aes(x = mwp, fill = site)) +
+  geom_histogram(binwidth = 0.2, position = "stack", colour = NA) +
+  facet_wrap(~ species, scales = "free", ncol = 5) +
+  scale_fill_manual(values = site_cols, name = "Site") +
+  scale_x_continuous(breaks = scales::breaks_pretty(n = 3)) +
+  scale_y_continuous(breaks = scales::breaks_pretty(n = 3), expand = expansion(mult = c(0, 0.05))) +
+  labs(x = expression(Psi[MD]~"(MPa)"), y = "Count") +
+  theme(strip.text = element_text(size = 9, face = "bold"),
+        strip.background = element_blank(),
+        axis.text = element_text(size = 8),
+        legend.position = "bottom", legend.key = element_blank())
+
+figS4_psi_dist
+
+ggsave(plot = figS4_psi_dist, here::here("output", "figures", "SI", "Fig_S04_psi_distributions.jpg"), dpi = 600,
+       height = 8, width = 8, units = "in")
+```
+
+#Table S1 (dataset summary)
 
 ```{r}
 #install.packages("devtools")
@@ -353,15 +402,7 @@ traits_df <- read_csv(here("data", "traits_rd_20250327.csv")) %>%
 
 sp_info <- merge(traits_df, SpCodes) %>% 
   mutate(sp_code = SpCode6) %>% 
-  mutate(dec_ever = case_when(
-    species %in% c("QUEDOU",
-                   "QUEGAR",
-                   "QUEKEL",
-                   "SALLEU",
-                   "SALMEL") ~ "Dec",
-    species %in% c("ERIFAS") ~ "Semi-Dec",
-    TRUE ~ as.character("Ever")
-  )) %>% 
+  mutate(dec_ever = leaf_habit_class(species)) %>%  # defined in 00_figure_setup.R
   mutate(growth_form = case_when(
     species %in% c("CERBET") ~ "tree/shrub",
     TRUE ~ as.character(growth_form)
@@ -416,7 +457,7 @@ table1_df <- merge(df1, sp_info, by = c("species")) %>%
   adorn_totals("row") %>% 
   ungroup()
 
-write_csv(table1_df, here("output", "tables", "Table_01.csv"))
+write_csv(table1_df, here("output", "tables", "Table_S01_species_sites.csv"))
 ```
 
 ####Figure 1: (datasets)
@@ -436,7 +477,7 @@ fig1 <- df1 %>%
   ggplot(aes(y = lfm*100, x = mwp, color = Genus_species)) + 
   geom_hline(yintercept = 60, linetype = "dotted") +
     geom_point(alpha = .8) +
-  labs(x = "Midday Water Potential (MPa)", 
+  labs(x = expression(Psi[MD]~"(MPa)"), 
        y = "Live Fuel Moisture (%)", 
        color = "Species", 
        shape = "Study") +
@@ -473,7 +514,7 @@ for (i in seq_along(ilfm.sat.vec)) MWPcrit[i] <- solveForX(c(ilfm.sat.vec[i], sl
 lfm.sat.vec <- 1 / ilfm.sat.vec
 plot(MWPcrit, lfm.sat.vec, xlim = xlim_mwp, ylim = c(0,4),
      type = "l", lwd = 2,
-     xlab = "Minimum MWP (MPa)", ylab = "LFM @ MWP=0")
+     xlab = expression(Psi[min]~"(MPa)"), ylab = "LFM @ MWP=0")
 
 for (i in seq_along(ilfm.sat.vec)) MWPcrit[i] <- solveForX(c(ilfm.sat.vec[i], slp), 1/0.5)
 lfm.sat.vec <- 1 / ilfm.sat.vec
@@ -619,7 +660,7 @@ pA <- ggplot(dfB_curve, aes(x = MWP, y = LFM, color = id)) +
            hjust = 0, vjust = 1, size = 5) +
   coord_cartesian(ylim = c(0,3), xlim = xlim_mwp) +
   scale_color_manual(values = cols, guide = "none") +
-  labs(x = "Midday Water Potential (MPa)", y = "LFM (%)") +
+  labs(x = expression(Psi[MD]~"(MPa)"), y = "LFM (g water / g dry mass)") +
   base_theme
 
 pB <- ggplot() +
@@ -636,7 +677,7 @@ pB <- ggplot() +
            hjust = 0, vjust = 1, size = 5) +
   coord_cartesian(ylim = c(0,3), xlim = xlim_mwp) +
   scale_color_manual(values = cols, guide = "none") +
-  labs(x = "Midday Water Potential (MPa)", y = "1/LFM") +
+  labs(x = expression(Psi[MD]~"(MPa)"), y = "1/LFM (g dry mass / g water)") +
   base_theme
 
 final_plot <- pA + pB + plot_layout(ncol = 2, axis_titles = "collect")
@@ -888,7 +929,7 @@ p_compare <- ggplot(effects_plot,
 p_compare
 
 ggsave(
-  filename = here("output", "figures", "SI", "Fig_S04_study_RE_comparison.png"),
+  filename = here("output", "figures", "SI", "unused_study_RE_comparison.png"),
   plot     = p_compare,
   width    = 8,
   height   = 7,
@@ -907,51 +948,78 @@ library(dplyr)
 library(readr)
 library(here)
 
+# Table S4: species intercepts (at the mean observed Psi) and slopes from the
+# species-interaction linear model; Table S5 repeats them with a study random effect
+mod_spp_int    <- lm(ilfm ~ mwp * species, data = df1)
 mod_spp_int_re <- lmer(ilfm ~ mwp * species + (1 | study),
                       data = df1, REML = FALSE)
 
 mwp_ref <- mean(df1$mwp, na.rm = TRUE)
 
-emm_int <- emmeans(
-  mod_spp_int_re,
-  ~ species,
-  at = list(mwp = mwp_ref)
-) %>%
-  as.data.frame() %>%
-  rename(
-    intercept_iLFM     = emmean,
-    intercept_iLFM_SE  = SE,
-    intercept_iLFM_lwr = lower.CL,
-    intercept_iLFM_upr = upper.CL
-  ) %>%
-  select(-df)
+species_params <- function(mod) {
+  emm_int <- emmeans(mod, ~ species, at = list(mwp = mwp_ref)) %>%
+    as.data.frame() %>%
+    rename(
+      intercept_iLFM     = emmean,
+      intercept_iLFM_SE  = SE,
+      intercept_iLFM_lwr = lower.CL,
+      intercept_iLFM_upr = upper.CL
+    ) %>%
+    select(-df)
 
-emm_slp <- emtrends(
-  mod_spp_int_re,
-  ~ species,
-  var = "mwp"
-) %>%
-  as.data.frame() %>%
-  rename(
-    slope_iLFM     = mwp.trend,
-    slope_iLFM_SE  = SE,
-    slope_iLFM_lwr = lower.CL,
-    slope_iLFM_upr = upper.CL
-  ) %>%
-  select(-df)
+  emm_slp <- emtrends(mod, ~ species, var = "mwp") %>%
+    as.data.frame() %>%
+    rename(
+      slope_iLFM     = mwp.trend,
+      slope_iLFM_SE  = SE,
+      slope_iLFM_lwr = lower.CL,
+      slope_iLFM_upr = upper.CL
+    ) %>%
+    select(-df)
 
-table_species_params <- emm_int %>%
-  left_join(emm_slp, by = "species") %>%
-  mutate(
-    intercept_LFM = 100 * (1 / intercept_iLFM),
-    mwp_ref = mwp_ref
-  ) %>%
-  mutate(across(where(is.numeric), round, 4))
+  emm_int %>%
+    left_join(emm_slp, by = "species") %>%
+    mutate(
+      intercept_LFM = 100 * (1 / intercept_iLFM),
+      mwp_ref = mwp_ref
+    ) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 4)))
+}
 
+table_species_params <- species_params(mod_spp_int)
 write_csv(
   table_species_params,
   here("output", "tables", "Table_S04_species_params.csv")
 )
+
+table_study_re <- bind_rows(
+  table_species_params %>% mutate(model = "lm: no study random effect"),
+  species_params(mod_spp_int_re) %>% mutate(model = "lmer: study random effect")
+)
+write_csv(
+  table_study_re,
+  here("output", "tables", "Table_S05_study_random_effect.csv")
+)
+
+# HTML versions for the SI (same bootstrap style as Table S7; no pandoc needed)
+save_param_html <- function(tab, file) {
+  tab <- tab %>%
+    transmute(Species = species, `Ref. MPa` = sprintf("%.3f", mwp_ref),
+              `iLFM intercept` = sprintf("%.3f", intercept_iLFM), `int SE` = sprintf("%.3f", intercept_iLFM_SE),
+              `int lower` = sprintf("%.3f", intercept_iLFM_lwr), `int upper` = sprintf("%.3f", intercept_iLFM_upr),
+              slope = sprintf("%.3f", slope_iLFM), `slope SE` = sprintf("%.3f", slope_iLFM_SE),
+              `slope lower` = sprintf("%.3f", slope_iLFM_lwr), `slope upper` = sprintf("%.3f", slope_iLFM_upr),
+              `LFM intercept (%)` = sprintf("%.1f", intercept_LFM),
+              across(any_of("model"), ~ .x, .names = "Model"))
+  k <- knitr::kable(tab, format = "html", align = c("l", rep("r", ncol(tab) - 1))) %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, position = "left")
+  htmltools::save_html(
+    htmltools::tagList(rmarkdown::html_dependency_jquery(), rmarkdown::html_dependency_bootstrap("simplex"),
+                       htmltools::HTML(as.character(k))),
+    file)
+}
+save_param_html(table_species_params, here("output", "tables", "Table_S04_species_params.html"))
+save_param_html(table_study_re, here("output", "tables", "Table_S05_study_random_effect.html"))
 ```
 #Table S2: Are models for gymnos and angios different?
 
@@ -968,8 +1036,12 @@ df2 <- df1 %>%
     TRUE~ as.character("Angiosperm")
   ))
 
-mod_spp_group <- lmer(ilfm ~ mwp * group + (1|species),
-                      data = df2, REML = T)
+# Species random intercepts AND slopes: the conifer-angiosperm slope contrast is then
+# tested against between-species variation (df ~ number of species), not ~1,400 observations.
+# (Random-intercept-only version: t = 12.2 on ~1,450 df, overstated precision.)
+mod_spp_group <- lmerTest::lmer(ilfm ~ mwp * group + (mwp | species),
+                                data = df2, REML = T,
+                                control = lmerControl(optimizer = "bobyqa"))
 
 summary(mod_spp_group)
 
@@ -980,14 +1052,14 @@ library(here)
 model_results <- tidy(mod_spp_group) 
 
 model_results <- model_results %>%
-  mutate(formula = "ilfm ~ mwp * group + (1 | species)")
+  mutate(formula = "ilfm ~ mwp * group + (mwp | species)")
 
 write.csv(model_results, 
           file = here("output", "tables", "Table_S05_gymno_angio.csv"), 
           row.names = FALSE)
 
 fixed_effects_wide <- tidy(mod_spp_group, effects = "fixed") %>%
-  select(term, estimate, std.error, statistic)
+  select(term, estimate, std.error, statistic, df, p.value)
 
 write.csv(fixed_effects_wide, 
           file = here("output", "tables", "Table_S05_gymno_angio_wide.csv"), 
@@ -1214,8 +1286,7 @@ ggplot(df_pred, aes(x = lfm, y = lfm_pred, color = species,
 #Figure 3: 
 
 ```{r}
-color_species_selected <- scale_color_manual(
-  values = c(
+species_cols_selected <- c(
      ABICON = "#5b859e",
      ADEFAS = "#2f357c",
      CALDEC = "#59385c",
@@ -1226,10 +1297,20 @@ color_species_selected <- scale_color_manual(
      PINJEF = "#ada43b",
      QUEDUR = "#1e5a46",
      SALLEU = "#d48f90",
-     UMBCAL = "#d8b847"
-  ),
+     UMBCAL = "#46a39a"
+  )
+
+color_species_selected <- scale_color_manual(
+  values = species_cols_selected,
+  breaks = names(species_cols_selected),
   drop = FALSE
 )
+
+# Conifer fits drawn bold to set them apart from angiosperms
+conifer_spp <- c("ABICON", "CALDEC", "PINJEF", "PSEMEN")
+lw_conifer <- 1.4
+lw_angio   <- 0.5
+linewidth_conifer <- scale_linewidth_manual(values = c(`TRUE` = lw_conifer, `FALSE` = lw_angio), guide = "none")
 
 concept_slopes_df <- concept_both_df %>%
   filter(group == "species") %>% 
@@ -1268,15 +1349,17 @@ model_lines <- concept_slopes_df  %>%
   ungroup() %>%
   mutate(
     mwp = sign_mwp * abs_mwp,
-    ilfm_pred = intercept + slope * mwp
-  ) 
+    ilfm_pred = intercept + slope * mwp,
+    conifer = species %in% conifer_spp
+  )
 
 figSXa <- ggplot(concept_slopes_df , aes(x = mwp, y = ilfm)) +
-  geom_point(aes(color = species), alpha = 0.8, size = .7) +  
-  geom_line(data = model_lines, aes(x = mwp, y = ilfm_pred, color = species), size = 0.5) +  
-  color_species_selected + 
+  geom_point(aes(color = species), alpha = 0.8, size = .7) +
+  geom_line(data = model_lines, aes(x = mwp, y = ilfm_pred, color = species, linewidth = conifer)) +
+  color_species_selected +
+  linewidth_conifer +
   labs(
-    x = expression(Psi[MDmin]~"(MPa)"),
+    x = expression(Psi[MD]~"(MPa)"),
     y = "1/LFM",
     color = "Study"
   ) +
@@ -1287,10 +1370,11 @@ figSXa <- ggplot(concept_slopes_df , aes(x = mwp, y = ilfm)) +
 
 figSXb <- ggplot(concept_slopes_df , aes(x = mwp, y = lfm*100)) +
   geom_point(aes(color = species), alpha = 0.8, size = .7) +  
-  geom_line(data = model_lines, aes(x = mwp, y = 100*(1/ilfm_pred), color = species), size = .5) +  
-  color_species_selected + 
+  geom_line(data = model_lines, aes(x = mwp, y = 100*(1/ilfm_pred), color = species, linewidth = conifer)) +
+  color_species_selected +
+  linewidth_conifer +
   labs(
-    x = expression(Psi[MDmin]~"(MPa)"),
+    x = expression(Psi[MD]~"(MPa)"),
     y = "LFM (%)"
   ) +
   theme(
@@ -1303,8 +1387,11 @@ legend <- cowplot::get_legend(
     geom_line(size = 0.5) +
     labs(color = "Species") +
     theme_minimal() +
-    color_species_selected
-) 
+    color_species_selected +
+    guides(color = guide_legend(override.aes = list(
+      linewidth = ifelse(names(species_cols_selected) %in% conifer_spp, lw_conifer, lw_angio)
+    )))
+)
 
 # Combine the two square plots side-by-side
 fig_panels <- cowplot::plot_grid(figSXb, figSXa, ncol = 2, rel_widths = c(1, 1))
@@ -1448,7 +1535,7 @@ fig3.1 <- cowplot::plot_grid(fig3a, fig3b, nrow = 2)
 fig3.1 <- cowplot::plot_grid(fig3.1, legend, nrow = 1, rel_widths = c(1, 0.5))
 fig3.1
 
-ggsave(plot = fig3.1, here::here("output", "figures", "SI", "Fig_S02_species_site_regression.jpg"), dpi = 600, height = 4, width = 6, units = "in")
+ggsave(plot = fig3.1, here::here("output", "figures", "SI", "unused_common_slope_fits.jpg"), dpi = 600, height = 4, width = 6, units = "in")
 ```
 
 
@@ -1561,7 +1648,7 @@ figSX
 
 ggsave(
   plot = figSX,
-  filename = here::here("output", "figures", "SI", "Fig_S03_by_functional_type.jpg"),
+  filename = here::here("output", "figures", "SI", "unused_by_functional_type.jpg"),
   dpi = 600, height = 4, width = 6, units = "in"
 )
 
@@ -1641,17 +1728,19 @@ figSX_studydiffs <- ggplot(df_plot, aes(x = mwp, y = ilfm, color = study, group 
     "StuntRanch" = "#E69F00",
     "SEKI"       = "#56B4E9",
     "Sedgwick"   = "#D55E00"
-  ))
+  ),
+  breaks = c("Pepperwood", "SEKI", "Sedgwick", "StuntRanch"),
+  labels = c("Pepperwood", "Providence Creek", "Sedgwick", "Stunt Ranch"))
 
 figSX_studydiffs
 
 ggsave(plot =figSX_studydiffs,
-        filename = here::here("output", "figures", "main", "Fig_05_study_differences.jpg"),
+        filename = here::here("output", "figures", "SI", "unused_study_differences_04.jpg"),  # Fig S7 is made in 06
        dpi = 600, width = 9, height = 5)
 
 ```
 
-#####Figure S13 (post-hoc check: slope break near ΨTLP)
+#####Figure S3 (post-hoc check: slope break near ΨTLP)
 
 Nolan et al. (2020) proposed that the LFMC~Ψleaf relationship breaks into two segments at the turgor loss point (ΨTLP). Our primary model does not assume this breakpoint, but here we check for it directly: for each species with enough data spanning both sides of its independently measured ΨTLP (n >= 20, n >= 5 on each side), we fit a free-breakpoint segmented regression of ilfm ~ mwp (`segmented` package) and test for a significant change in slope (Davies' test). Species are colored where the slope break is significant (p < 0.05); the rest are shown in grey with a simple linear fit only.
 
@@ -1677,7 +1766,7 @@ d_tlp <- df1 %>%
   filter(!(species == "CALDEC" & date >= as.Date("2021-01-01"))) %>%
   # Quercus douglasii was measured at both Pepperwood (n=12, Oct 2020/2021 + Jun 2022)
   # and Sedgwick (n=174, Mar-Sep 2022), and this species already shows a significant
-  # site x slope interaction elsewhere in our analysis (Fig. S12/Table S5). Pooling both
+  # site x slope interaction elsewhere in our analysis (Fig. S7/Table S5). Pooling both
   # sites shifts the breakpoint away from ΨTLP (-4.44 MPa vs. measured -3.40 MPa); using
   # Sedgwick alone (a single, internally consistent site/season with 174 points spanning
   # both sides of ΨTLP) brings the breakpoint closer to ΨTLP (-3.93 +/- 0.21 MPa) while the
@@ -1730,22 +1819,19 @@ sp_order_tlp <- summary_df_tlp %>% arrange(desc(significant), species) %>% pull(
 points_df_tlp <- points_df_tlp %>%
   left_join(summary_df_tlp %>% dplyr::select(species, significant), by = "species") %>%
   mutate(species = factor(species, levels = sp_order_tlp),
-         inv_mwp = 1 / mwp,
-         lfm_pct = lfm * 100)
+         ilfm_obs = 1 / lfm)
 lines_df_tlp <- lines_df_tlp %>%
   left_join(summary_df_tlp %>% dplyr::select(species, significant), by = "species") %>%
   mutate(species = factor(species, levels = sp_order_tlp),
-         inv_mwp = 1 / mwp,
-         lfm_pred_pct = 100 / ilfm_pred)
+         )
 summary_df_tlp <- summary_df_tlp %>% mutate(species = factor(species, levels = sp_order_tlp))
 
-# Breakpoint/TLP markers, transformed into 1/MPa to match the plotted x-axis
+# Breakpoint/TLP markers on the MPa axis (plotted in model space, iLFM ~ mwp, so fits are straight)
 vline_df_tlp <- summary_df_tlp %>%
   filter(significant) %>%
   dplyr::select(species, breakpoint, psi_tlp) %>%
   pivot_longer(cols = c(breakpoint, psi_tlp), names_to = "type", values_to = "value") %>%
-  mutate(value = 1 / value,
-         type = recode(type,
+  mutate(type = recode(type,
                         breakpoint = "Estimated breakpoint",
                         psi_tlp = "ΨTLP"))
 
@@ -1756,33 +1842,38 @@ cat(n_sig_tlp, "of", nrow(summary_df_tlp), "species show a significant slope bre
 
 figS13_tlp <- ggplot() +
   geom_point(data = points_df_tlp %>% filter(!significant),
-             aes(x = inv_mwp, y = lfm_pct), color = "grey65", alpha = 0.5, size = 0.7) +
+             aes(x = mwp, y = ilfm_obs), color = "grey65", alpha = 0.5, size = 0.7) +
   geom_line(data = lines_df_tlp %>% filter(!significant),
-            aes(x = inv_mwp, y = lfm_pred_pct), color = "grey45", linewidth = 0.5) +
+            aes(x = mwp, y = ilfm_pred), color = "grey45", linewidth = 0.5) +
   geom_point(data = points_df_tlp %>% filter(significant),
-             aes(x = inv_mwp, y = lfm_pct, color = species), alpha = 0.7, size = 0.7) +
+             aes(x = mwp, y = ilfm_obs, color = species), alpha = 0.7, size = 0.7) +
   geom_line(data = lines_df_tlp %>% filter(significant),
-            aes(x = inv_mwp, y = lfm_pred_pct, color = species), linewidth = 0.7) +
+            aes(x = mwp, y = ilfm_pred, color = species), linewidth = 0.7) +
   geom_vline(data = vline_df_tlp, aes(xintercept = value, linetype = type),
              color = "black", linewidth = 0.4) +
   color_species +
   scale_linetype_manual(values = c("Estimated breakpoint" = "dashed",
                                     "ΨTLP" = "dotted")) +
+  # tick spacing scales with each panel's Ψ range so labels never collide
+  scale_x_continuous(breaks = function(lim) {
+    w <- if (diff(lim) > 5) 2 else if (diff(lim) > 1.8) 1 else 0.5
+    seq(ceiling(lim[1] / w) * w, lim[2], by = w)
+  }) +
   facet_wrap(~species, scales = "free", ncol = 6,
              labeller = as_labeller(sp_label_vec_tlp)) +
-  labs(x = expression(1/Psi[MD]~"(MPa"^-1*")"), y = "LFM (%)", linetype = NULL) +
+  labs(x = expression(Psi[MD]~"(MPa)"), y = "iLFM (1/LFM)", linetype = NULL) +
   guides(color = "none") +
   theme(legend.position = "bottom",
-        legend.text = element_text(size = 13),
-        strip.text = element_text(face = "italic", size = 11),
-        axis.text = element_text(size = 10),
-        axis.title = element_text(size = 14))
+        legend.text = element_text(size = 16),
+        strip.text = element_text(face = "italic", size = 14),
+        axis.text = element_text(size = 13),
+        axis.title = element_text(size = 18))
 
 figS13_tlp
 
 ggsave(plot = figS13_tlp,
-       filename = here::here("output", "figures", "SI", "Fig_S13_tlp_breakpoints.jpg"),
+       filename = here::here("output", "figures", "SI", "Fig_S03_tlp_breakpoints.jpg"),
        dpi = 600, width = 13, height = 9, units = "in")
 ```
 
-Figure S13. Post-hoc test for a slope break in the iLFM ~ ΨMD relationship near the turgor loss point (ΨTLP), following the logic of Nolan et al. (2020). Top row (colored): the five species (of 18 with sufficient data spanning both sides of ΨTLP) with a statistically significant change in slope (Davies' test, p < 0.05); dashed vertical line = breakpoint estimated by free-knot segmented regression, dotted vertical line = independently measured ΨTLP (`data/traits_rd_20250327.csv`). Remaining panels (grey): the thirteen species with no significant slope break, shown with a single linear fit. Seven additional species in the dataset had insufficient data spanning both sides of ΨTLP and are excluded. For *Calocedrus decurrens*, the panel shown uses only its 2020 (Aug-Oct) field campaign: pooling with a second 2021 (Apr-Jun) campaign produced a spurious, highly significant "V"-shaped breakpoint driven by the two campaigns having opposite-signed ΨMD~iLFM slopes (likely a new-needle-flush phenology effect in the spring campaign), not a TLP-associated transition. Restricted to the single consistent campaign, its estimated breakpoint (-2.22 +/- 0.19 MPa) falls close to its measured ΨTLP (-2.30 MPa) but the change in slope is not significant at this reduced sample size (n = 36, Davies p = 0.067), so it is retained here in the grey (non-significant) group. For *Quercus douglasii*, the panel shown excludes a small (n = 12), site-mismatched Pepperwood subsample and uses only its larger Sedgwick dataset (n = 174, a single site/season, Mar-Sep 2022); this species already shows a significant site x slope interaction elsewhere in our analysis (Fig. S12/Table S5). Unlike C. decurrens, this correction did not remove the signal: the slope break remains highly significant (Davies p = 0.0027) and its breakpoint moves closer to the measured ΨTLP (-3.93 +/- 0.21 MPa vs. -3.40 MPa, compared to -4.44 MPa when both sites are pooled), indicating that site-pooling was distorting rather than creating this breakpoint.
+Figure S3. Post-hoc test for a slope break in the iLFM ~ ΨMD relationship near the turgor loss point (ΨTLP), following the logic of Nolan et al. (2020). Top row (colored): the seven species (of 18 with sufficient data spanning both sides of ΨTLP) with a statistically significant change in slope (Davies' test, p < 0.05); dashed vertical line = breakpoint estimated by free-knot segmented regression, dotted vertical line = independently measured ΨTLP (`data/traits_rd_20250327.csv`). Remaining panels (grey): the eleven species with no significant slope break, shown with a single linear fit. Seven additional species in the dataset had insufficient data spanning both sides of ΨTLP and are excluded. For *Calocedrus decurrens*, the panel shown uses only its 2020 (Aug-Oct) field campaign: pooling with a second 2021 (Apr-Jun) campaign produced a spurious, highly significant "V"-shaped breakpoint driven by the two campaigns having opposite-signed ΨMD~iLFM slopes (likely a new-needle-flush phenology effect in the spring campaign), not a TLP-associated transition. Restricted to the single consistent campaign, its estimated breakpoint (-2.22 +/- 0.19 MPa) falls close to its measured ΨTLP (-2.30 MPa) but the change in slope is not significant at this reduced sample size (n = 36, Davies p = 0.067), so it is retained here in the grey (non-significant) group. For *Quercus douglasii*, the panel shown excludes a small (n = 12), site-mismatched Pepperwood subsample and uses only its larger Sedgwick dataset (n = 174, a single site/season, Mar-Sep 2022); this species already shows a significant site x slope interaction elsewhere in our analysis (Fig. S7/Table S5). Unlike C. decurrens, this correction did not remove the signal: the slope break remains highly significant (Davies p = 0.0027) and its breakpoint moves closer to the measured ΨTLP (-3.93 +/- 0.21 MPa vs. -3.40 MPa, compared to -4.44 MPa when both sites are pooled), indicating that site-pooling was distorting rather than creating this breakpoint.

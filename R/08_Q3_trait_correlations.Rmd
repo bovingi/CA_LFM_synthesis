@@ -28,7 +28,8 @@ Set up data:
 #read in trait df.
 #Data is mean from TRY, 
 traits_df <- read_csv(here("data", "traits_rd_20250327.csv")) %>% 
-  mutate(swc_g_calc = 1 - ldmc, #If ldmc is g(SW)/g(DW), then 1 - g(SW)/g(DW) = water component. 
+  mutate(
+         # SWC dropped: for saturated leaves SWC = 1/LDMC - 1, so it is redundant with LDMC
          sla_calc = 1/lma
          ) #%>% 
   # mutate(sla = case_when(
@@ -36,13 +37,19 @@ traits_df <- read_csv(here("data", "traits_rd_20250327.csv")) %>%
   #   TRUE ~ as.numeric(sla)
   # ))
 
-q3_df1 <- read_csv(here::here("data", "concept_df.csv")) %>% 
-  select(1:15) %>% 
-  clean_names() %>% 
-  group_by(species) %>% 
+# Psi-min: EVT estimate (0.99 quantile, floored at the lowest reading) from script 04;
+# lowest observed value for species with too few tail points
+psi_min_df <- read_csv(here::here("data", "psi_min_by_species.csv")) %>%
+  select(species, psi_min_evt = psi_min)
+
+q3_df1 <- read_csv(here::here("data", "concept_df.csv")) %>%
+  select(1:15) %>%
+  clean_names() %>%
+  left_join(psi_min_df, by = "species") %>%
+  group_by(species) %>%
   mutate(min_lfm = min(lfm, na.rm = T),
          max_lfm = max(lfm, na.rm = T),
-         min_wp = min(mwp, na.rm = T), 
+         min_wp = psi_min_evt,
          max_wp = max(mwp, na.rm = T),
          min_ilfm = 1/min_lfm, 
          intercept_lfm = 1/intercept,
@@ -83,15 +90,37 @@ q3_df_outs    <- q3_df %>% filter(!(species %in% c("SALLEU", "SALMEL")))
 How closely are observed min mpas matched to published means?
 
 ```{r observed_vs_published, warning = F}
-q3_df %>%
-  ggplot(aes(y = min_wp,
+# observed min. MD and published (TRY) min. MD, one row per species
+obs_vs_pub <- q3_df %>%
+  distinct(species, min_wp, psimin_md) %>%
+  filter(!is.na(min_wp), !is.na(psimin_md))
+
+# shared x/y range so the panel is square
+pub_lims <- range(c(obs_vs_pub$min_wp, obs_vs_pub$psimin_md))
+
+figS6_obs_vs_pub <- ggplot(obs_vs_pub, aes(y = min_wp,
              x = psimin_md,
              color= species)) +
-  geom_point() +
-  labs(y = "Observed Min. Midday", 
-       x = "Min. MD from TRY") +
   geom_abline() +
-  color_species
+  geom_point(size = 4) +
+  coord_equal(xlim = pub_lims, ylim = pub_lims) +
+  labs(y = "Estimated Ψmin (EVT; MPa)",
+       x = "Published Ψmin (TRY; MPa)",
+       color = "Species") +
+  color_species +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(axis.title = element_text(size = 18),
+        axis.text = element_text(size = 15),
+        legend.title = element_text(size = 15),
+        legend.text = element_text(size = 13))
+
+figS6_obs_vs_pub
+
+ggsave(plot = figS6_obs_vs_pub, here::here("output", "figures", "SI", "Fig_S06_observed_vs_published_psi_min.jpg"), dpi = 600,
+       height = 6,
+       width = 7.5, units = "in")
+
+cor.test(obs_vs_pub$min_wp, obs_vs_pub$psimin_md)
 ```
 
 
@@ -109,7 +138,7 @@ library(scales)
 # ----------------------------
 model_params <- c("min_lfm", "max_lfm", "intercept_lfm", "slope", "min_wp")
 
-traits <- c("plc50_stem", "psi_tlp", "ldmc", "sla", "swc")
+traits <- c("plc50_stem", "psi_tlp", "ldmc", "sla")
 
 vars_use <- c(model_params, traits)
 
@@ -119,11 +148,10 @@ vars_use <- c(model_params, traits)
 nice_names <- c(
   # model parameters
   min_lfm        = "LFMmin",
-  max_lfm        = "LFMmax",
-  intercept_lfm  = "Intercept (LFM)",
+  max_lfm        = "Max. observed LFM",
+  intercept_lfm  = "LFMmax",
   slope          = "Slope",
-  min_wp         = "Min Ψmd",
-  swc            = "SWC",
+  min_wp         = "Ψmin",
  # maxlfm_minwp   = "Max LFM @ Min Ψ",
 
   # traits
@@ -264,7 +292,7 @@ p_corr <- ggplot(plot_df, aes(x = x_lab, y = y_lab, fill = r)) +
   )
 
 ggsave(
-  filename = here("output", "figures", "SI", "Fig_S10b_trait_param_no_salvia.jpeg"),
+  filename = here("output", "figures", "SI", "unused_trait_param_no_salvia.jpeg"),
   plot = p_corr,
   width = 5.5,
   height = 5,
@@ -276,9 +304,10 @@ ggsave(
 ####Table SX. (traits)
 ```{r}
 tablesx <- traits_df %>% 
-  select(sp_code, all_of(traits))  %>%
-  mutate(across(where(is.numeric), ~ round(.x, 2)))
-tablesx
+  select(sp_code, all_of(traits), all_of(paste0(traits, "_source")))  %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2))) %>%
+  # each trait followed by its source
+  relocate(all_of(as.vector(rbind(traits, paste0(traits, "_source")))), .after = sp_code)
 
 tablesx
 
@@ -490,7 +519,7 @@ build_panel_xy <- function(
 # ============================
 fig5a <- build_panel_xy(
   xvar = "plc50_stem", yvar = "min_wp",
-  xlab = "P50 (MPa)", ylab = expression(Psi[MDmin]~"(MPa)"),
+  xlab = "P50 (MPa)", ylab = expression(Psi[min]~"(MPa)"),
   flip_x = TRUE,
   show_x = FALSE,
   show_y = TRUE
@@ -511,7 +540,7 @@ fig5b <- build_panel_xy(
 
 fig5c <- build_panel_xy(
   xvar = "plc50_stem", yvar = "max_lfm",
-  xlab = "P50 (MPa)", ylab = "Max. Seasonal LFM (%)",
+  xlab = "P50 (MPa)", ylab = "Max. observed LFM (%)",
   yscale = scale_y_continuous(
     breaks = c(1.0, 1.5, 2.0, 2.5),
     labels = c(100, 150, 200, 250)
@@ -530,7 +559,7 @@ fig5c <- build_panel_xy(
 fig5d <- build_panel_xy(
   xvar = "psi_tlp", yvar = "max_lfm",
   xlab = expression(psi[TLP]~"(MPa)"),
-  ylab = "Max. Seasonal LFM (%)",
+  ylab = "Max. observed LFM (%)",
   yscale = scale_y_continuous(
     breaks = c(1.0, 1.5, 2.0, 2.5),
     labels = c(100, 150, 200, 250)
@@ -640,7 +669,7 @@ fig_all_labeled
 # ----------------------------
 # ggsave(
 #   plot = fig_all_labeled,
-#   filename = here::here("output", "figures", "main", "Fig_08_P50_panels.jpg"),
+#   filename = here::here("output", "figures", "main", "Fig_07_P50_panels.jpg"),
 #   dpi = 600,
 #   width = 6,
 #   height = 8
@@ -894,7 +923,7 @@ build_panel_xy <- function(
 # ============================
 fig5a <- build_panel_xy(
   xvar = "plc50_stem", yvar = "min_wp",
-  xlab = "P50 (MPa)", ylab = expression(Psi[MDmin]~"(MPa)"),
+  xlab = "P50 (MPa)", ylab = expression(Psi[min]~"(MPa)"),
   flip_x = TRUE,
   show_x = FALSE,
   show_y = TRUE
@@ -1044,7 +1073,7 @@ fig_all_labeled
 # ----------------------------
 ggsave(
   plot = fig_all_labeled,
-# filename = here::here("output", "figures", "main", "Fig_08_P50_panels_LFMint.jpg"),  # disabled
+# filename = here::here("output", "figures", "main", "Fig_07_P50_panels_LFMint.jpg"),  # disabled
   filename = tempfile(fileext = ".jpg"),
   dpi = 600,
   width = 6,
@@ -1096,7 +1125,7 @@ ggsave(
 
 
 
-#Fig 8*. P50 + TLP and model params - all salvia
+#Fig 7*. P50 + TLP and model params - all salvia
 
 ```{r}
 # ============================================================
@@ -1243,7 +1272,7 @@ build_panel_xy <- function(
     scale_linetype_manual(
       name = "Significance",
       values = sig_linetypes,
-      guide = guide_legend(ncol = 1, override.aes = list(linewidth = 1.25),  color = "black")
+      guide = "none"  # solid vs dashed is explained in the caption
     ) +
     labs(
       x = if (show_x) xlab else NULL,
@@ -1301,7 +1330,7 @@ build_panel_xy <- function(
 # ============================
 fig5a <- build_panel_xy(
   xvar = "plc50_stem", yvar = "min_wp",
-  xlab = "P50 (MPa)", ylab = expression(Psi[MDmin]~"(MPa)"),
+  xlab = "P50 (MPa)", ylab = expression(Psi[min]~"(MPa)"),
   flip_x = FALSE,
   show_x = FALSE,
   show_y = TRUE,
@@ -1312,8 +1341,8 @@ fig5b <- build_panel_xy(
   xvar = "plc50_stem", yvar = "min_lfm",
   xlab = "P50 (MPa)", ylab = "LFMmin (%)",
   yscale = scale_y_continuous(
-    breaks = c(.2, .4, .6, .8, 1, 1.2),
-    labels = c(50, 60, 70, 80, 90, 100)
+    breaks = c(.4, .6, .8, 1, 1.2),
+    labels = c(40, 60, 80, 100, 120)
   ),
   flip_x = FALSE,
   show_x = TRUE,
@@ -1323,7 +1352,7 @@ fig5b <- build_panel_xy(
 
 fig5c <- build_panel_xy(
   xvar = "plc50_stem", yvar = "max_lfm",
-  xlab = "P50 (MPa)", ylab = "Max. Seasonal LFM (%)",
+  xlab = "P50 (MPa)", ylab = "Max. observed LFM (%)",
   yscale = scale_y_continuous(
     breaks = c(1.0, 1.5, 2.0, 2.5),
     labels = c(100, 150, 200, 250)
@@ -1342,7 +1371,7 @@ fig5c <- build_panel_xy(
 fig5d <- build_panel_xy(
   xvar = "psi_tlp", yvar = "max_lfm",
   xlab = expression(psi[TLP]~"(MPa)"),
-  ylab = "Max. Seasonal LFM (%)",
+  ylab = "Max. observed LFM (%)",
   yscale = scale_y_continuous(
     breaks = c(1.0, 1.5, 2.0, 2.5),
     labels = c(100, 150, 200, 250)
@@ -1451,7 +1480,7 @@ fig_all_labeled
 # ----------------------------
 ggsave(
   plot = fig_all_labeled,
-  filename = here::here("output", "figures", "main", "Fig_08_P50_params.jpg"),
+  filename = here::here("output", "figures", "main", "Fig_07_P50_params.jpg"),
   dpi = 600,
   width = 6,
   height = 6
@@ -1705,7 +1734,7 @@ build_panel_xy <- function(
 # ============================
 fig5a <- build_panel_xy(
   xvar = "plc50_stem", yvar = "min_wp",
-  xlab = "P50 (MPa)", ylab = expression(Psi[MDmin]~"(MPa)"),
+  xlab = "P50 (MPa)", ylab = expression(Psi[min]~"(MPa)"),
   flip_x = TRUE,
   show_x = FALSE,
   show_y = TRUE
@@ -1855,7 +1884,7 @@ fig_all_labeled
 # ----------------------------
 ggsave(
   plot = fig_all_labeled,
-# filename = here::here("output", "figures", "main", "Fig_08_P50_panels_LFMint.jpg"),  # disabled
+# filename = here::here("output", "figures", "main", "Fig_07_P50_panels_LFMint.jpg"),  # disabled
   filename = tempfile(fileext = ".jpg"),
   dpi = 600,
   width = 6,
@@ -1906,7 +1935,7 @@ ggsave(
 ```
 
 
-#Fig 9: SLA and LDMC, intercept
+#Fig 8: SLA and LDMC, intercept
 
 ```{r}
 # ============================================================
@@ -2019,7 +2048,8 @@ build_panel_one_reg <- function(
     yscale = NULL,
     show_x = FALSE, 
     show_y = TRUE,
-    add_r2 = TRUE
+    add_r2 = TRUE,
+    line_type = "solid"  # "dashed" when the regression is not significant
 ) {
   st_all <- get_model_stats(q3_df, yvar, xvar)
   
@@ -2028,8 +2058,14 @@ build_panel_one_reg <- function(
   p <- ggplot() +
     geom_point(
       data = q3_df,
-      aes(x = .data[[xvar]], y = .data[[yvar]], color = species),
+      aes(x = .data[[xvar]], y = .data[[yvar]], color = species, shape = functional_type),
       size = pt_size, alpha = pt_alpha
+    ) +
+    scale_shape_manual(
+      name = "Functional type",
+      values = c(angiosperm = 16, gymnosperm = 17),
+      labels = c(angiosperm = "Angiosperm", gymnosperm = "Gymnosperm"),
+      guide = guide_legend(nrow = 1, override.aes = list(size = 3.8, alpha = 1), order = 4)
     ) +
     geom_point(
       data = ring_df,
@@ -2051,7 +2087,7 @@ build_panel_one_reg <- function(
       data = q3_df,
       aes(x = .data[[xvar]], y = .data[[yvar]]),
       method = "lm", se = FALSE,
-      linewidth = 0.95, color = "black"
+      linewidth = 0.95, color = "black", linetype = line_type
     ) +
     labs(
       x = if (show_x) xlab else NULL,
@@ -2131,8 +2167,14 @@ build_panel_two_regs <- function(
   p <- ggplot() +
     geom_point(
       data = q3_df,
-      aes(x = .data[[xvar]], y = .data[[yvar]], color = species),
+      aes(x = .data[[xvar]], y = .data[[yvar]], color = species, shape = functional_type),
       size = pt_size, alpha = pt_alpha
+    ) +
+    scale_shape_manual(
+      name = "Functional type",
+      values = c(angiosperm = 16, gymnosperm = 17),
+      labels = c(angiosperm = "Angiosperm", gymnosperm = "Gymnosperm"),
+      guide = guide_legend(nrow = 1, override.aes = list(size = 3.8, alpha = 1), order = 4)
     ) +
     geom_point(
       data = ring_df,
@@ -2164,7 +2206,7 @@ build_panel_two_regs <- function(
     scale_linetype_manual(
       name = "Significance",
       values = sig_linetypes,
-      guide = guide_legend(ncol = 2, override.aes = list(linewidth = 1.25), order = 3)
+      guide = "none"  # solid vs dashed is explained in the caption
     ) +
     labs(
       x = if (show_x) xlab else NULL,
@@ -2223,11 +2265,12 @@ build_panel_two_regs <- function(
 # Panels (LDMC + SLA layout)
 # ============================================================
 
-figA <- build_panel_one_reg(
+# LFMmin ~ LDMC is significant only without the Salvias, so show both fits as in B-C
+figA <- build_panel_two_regs(
   xvar = "ldmc",
   yvar = "min_lfm",
-  ring_spp = NULL,
-  xlab = "LDMC (g/g)",
+  ring_spp = salvia_spp,
+  xlab = "LDMC (g g⁻¹)",
   ylab = "LFMmin (%)",
   yscale = scale_y_continuous(
     breaks = c(0.4, 0.6, 0.8, 1.0),
@@ -2242,7 +2285,7 @@ figB <- build_panel_two_regs(
   xvar = "ldmc",
   yvar = "intercept_lfm_pct",
   ring_spp = salvia_spp,
-  xlab = "LDMC (g/g)",
+  xlab = "LDMC (g g⁻¹)",
   ylab = "LFMmax (%)",
   show_x = FALSE,
   show_y = TRUE,
@@ -2253,30 +2296,30 @@ figC <- build_panel_two_regs(
   xvar = "sla",
   yvar = "intercept_lfm_pct",
   ring_spp = salvia_spp,
-  xlab = "SLA (mm2/mg)",
+  xlab = "SLA (cm² g⁻¹)",
   ylab = "LFMmax (%)",
   show_x = FALSE,
   show_y = FALSE,
   add_r2 = F
 )
 
-figD <- build_panel_one_reg(
+figD <- build_panel_two_regs(
   xvar = "ldmc",
   yvar = "slope",
-  ring_spp = NULL,
-  xlab = "LDMC (g/g)",
-  ylab = "Slope",
+  ring_spp = salvia_spp,
+  xlab = "LDMC (g g⁻¹)",
+  ylab = "Slope (MPa⁻¹)",
   show_x = TRUE,
   show_y = TRUE,
   add_r2 = F
 )
 
-figE <- build_panel_one_reg(
+figE <- build_panel_two_regs(
   xvar = "sla",
   yvar = "slope",
-  ring_spp = NULL,
-  xlab = "SLA (mm2/mg)",
-  ylab = "Slope",
+  ring_spp = salvia_spp,
+  xlab = "SLA (cm² g⁻¹)",
+  ylab = "Slope (MPa⁻¹)",
   show_x = TRUE,
   show_y = FALSE,
   add_r2 = F
@@ -2379,7 +2422,7 @@ p_final
 # 4) Save
 # ----------------------------
 ggsave(
-  filename = here::here("output", "figures", "main", "Fig_09_leaf_traits.jpg"),
+  filename = here::here("output", "figures", "main", "Fig_08_leaf_traits.jpg"),
   plot = p_final,
   dpi = 600,
   width = 6,
@@ -2388,7 +2431,7 @@ ggsave(
 
 ```
 
-##Fig 9 v2: Shape by f group, remove significance legend:
+##Fig 8 v2 (unused): Shape by f group, remove significance legend:
 
 
 ```{r}
@@ -2413,7 +2456,7 @@ q3_df <- read_csv(here("data", "q3_df.csv")) %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     )
   )
@@ -2422,7 +2465,7 @@ q3_df_outs <- q3_df_outs %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     )
   )
@@ -2437,7 +2480,7 @@ all_spp <- sort(unique(c(as.character(q3_df$species), as.character(q3_df_outs$sp
 spp_shapes_named <- sapply(all_spp, function(s) {
   ft <- q3_df$functional_type[q3_df$species == s][1]
   if (is.na(ft)) ft <- q3_df_outs$functional_type[q3_df_outs$species == s][1]
-  if (!is.na(ft) && ft == "Conifer") 17 else 16
+  if (!is.na(ft) && ft == "Gymnosperm") 17 else 16
 })
 
 # ----------------------------
@@ -2529,7 +2572,7 @@ build_panel_one_reg <- function(
     ) +
     scale_shape_manual(
       name = "Plant Group",
-      values = c("Conifer" = 17, "Angiosperm" = 16),
+      values = c("Gymnosperm" = 17, "Angiosperm" = 16),
       guide = guide_legend(override.aes = list(size = 3.8, alpha = 1, color = "black"), order = 2)
     ) +
     geom_smooth(
@@ -2591,7 +2634,7 @@ build_panel_two_regs <- function(
     ) +
     scale_shape_manual(
       name = "Plant Group",
-      values = c("Conifer" = 17, "Angiosperm" = 16),
+      values = c("Gymnosperm" = 17, "Angiosperm" = 16),
       guide = guide_legend(override.aes = list(size = 3.8, alpha = 1, color = "black"), order = 2, ncol = 2)
     ) +
     # 3. Reset color scale for regressions
@@ -2675,11 +2718,11 @@ p_final <- (A1 | legend_plot) / (B1 | C1) / (D1 | E1) +
 
 p_final
 
-ggsave(filename = here::here("output", "figures", "SI", "Fig_S07_traits_by_ftype.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
+ggsave(filename = here::here("output", "figures", "SI", "unused_traits_by_ftype.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
 ```
 
 
-###Fig 9 v3: Growth form
+###Unused (was Fig S11, then S10): Growth form
 
 ```{r}
 # ============================================================
@@ -2703,7 +2746,7 @@ q3_df <- q3_df %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     ),
     # Clean up growth_form text so it looks nice in the legend
@@ -2718,7 +2761,7 @@ q3_df_outs <- q3_df_outs %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     ),
     growth_form = case_when(
@@ -2751,7 +2794,7 @@ gf_colors <- c(
 
 # Shapes for Plant Group
 ft_shapes <- c(
-  "Conifer"    = 17,     # Solid triangle
+  "Gymnosperm"    = 17,     # Solid triangle
   "Angiosperm" = 16      # Solid circle
 )
 
@@ -2961,10 +3004,10 @@ p_final <- (A1 | legend_plot) / (B1 | C1) / (D1 | E1) +
 
 p_final
 
-ggsave(filename = here::here("output", "figures", "SI", "Fig_S12_traits_by_growthform.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
+ggsave(filename = here::here("output", "figures", "SI", "unused_traits_by_growthform.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
 ```
 
-###Fig 9 v4. Leaf habit: 
+###Unused (was Fig S10, then S9). Leaf habit: 
 
 ```{r}
 # ============================================================
@@ -2988,29 +3031,21 @@ q3_df <- q3_df %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     ),
-    # Clean up leaf_habit text so it looks nice in the legend
-    leaf_habit = case_when(
-      tolower(leaf_habit) == "evergreen" ~ "Evergreen",
-      tolower(leaf_habit) == "deciduous" ~ "Deciduous",
-      TRUE ~ as.character(leaf_habit)
-    )
+    # Evergreen / winter- / drought-deciduous (defined in 00_figure_setup.R)
+    leaf_habit = leaf_habit_class(species)
   )
 
 q3_df_outs <- q3_df_outs %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm",
       TRUE ~ as.character("Angiosperm")
     ),
-    leaf_habit = case_when(
-      tolower(leaf_habit) == "evergreen" ~ "Evergreen",
-      tolower(leaf_habit) == "deciduous" ~ "Deciduous",
-      TRUE ~ as.character(leaf_habit)
-    )
+    leaf_habit = leaf_habit_class(species)
   )
 
 # ----------------------------
@@ -3028,15 +3063,12 @@ sig_linetypes <- c(
   "p ≥ 0.05" = "dashed"
 )
 
-# Colors for Leaf Habit (Colorblind-friendly palette)
-lh_colors <- c(
-  "Evergreen" = "#009E73",   # Green
-  "Deciduous" = "#E69F00"    # Orange/Yellow
-)
+# Colors for Leaf Habit (Colorblind-friendly palette, defined in 00_figure_setup.R)
+lh_colors <- color_leaf_habit
 
 # Shapes for Plant Group
 ft_shapes <- c(
-  "Conifer"    = 17,     # Solid triangle
+  "Gymnosperm"    = 17,     # Solid triangle
   "Angiosperm" = 16      # Solid circle
 )
 
@@ -3104,7 +3136,7 @@ build_panel_one_reg <- function(
       shape = 21, fill = NA, size = ring_size, stroke = ring_stroke, show.legend = FALSE
     ) +
     scale_shape_manual(name = "Plant Group", values = ft_shapes) +
-    scale_color_manual(name = "Leaf Habit", values = lh_colors) +
+    scale_color_manual(name = "Leaf Habit", values = lh_colors, breaks = names(lh_colors)) +
     guides(
       color = guide_legend(order = 1, override.aes = list(size = 3.8, alpha = 1)),
       shape = guide_legend(order = 2, override.aes = list(size = 3.8, alpha = 1))
@@ -3158,7 +3190,7 @@ build_panel_two_regs <- function(
       shape = 21, fill = NA, size = ring_size, stroke = ring_stroke, show.legend = FALSE
     ) +
     scale_shape_manual(name = "Plant Group", values = ft_shapes) +
-    scale_color_manual(name = "Leaf Habit", values = lh_colors) +
+    scale_color_manual(name = "Leaf Habit", values = lh_colors, breaks = names(lh_colors)) +
     guides(
       color = guide_legend(order = 1, override.aes = list(size = 3.8, alpha = 1)),
       shape = guide_legend(order = 2, override.aes = list(size = 3.8, alpha = 1))
@@ -3198,11 +3230,11 @@ build_panel_two_regs <- function(
 # 6. Build Panels
 # ============================================================
 
-figA <- build_panel_one_reg(xvar="ldmc", yvar="min_lfm", xlab="LDMC", ylab="LFMmin (%)", yscale=scale_y_continuous(breaks=c(0.4, 0.6, 0.8, 1.0), labels=c(40, 60, 80, 100)), show_x=FALSE, show_y=TRUE, add_r2=F)
+figA <- build_panel_two_regs(xvar="ldmc", yvar="min_lfm", ring_spp=salvia_spp, xlab="LDMC", ylab="LFMmin (%)", yscale=scale_y_continuous(breaks=c(0.4, 0.6, 0.8, 1.0), labels=c(40, 60, 80, 100)), show_x=FALSE, show_y=TRUE, add_r2=F)
 figB <- build_panel_two_regs(xvar="ldmc", yvar="intercept_lfm_pct", ring_spp=salvia_spp, xlab="LDMC", ylab="LFMmax (%)", show_x=FALSE, show_y=TRUE, add_r2=F)
 figC <- build_panel_two_regs(xvar="sla", yvar="intercept_lfm_pct", ring_spp=salvia_spp, xlab="SLA", ylab="LFMmax (%)", show_x=FALSE, show_y=FALSE, add_r2=F)
-figD <- build_panel_one_reg(xvar="ldmc", yvar="slope", xlab="LDMC", ylab="Slope", show_x=TRUE, show_y=TRUE, add_r2=F)
-figE <- build_panel_one_reg(xvar="sla", yvar="slope", xlab="SLA", ylab="Slope", show_x=TRUE, show_y=FALSE, add_r2=F)
+figD <- build_panel_two_regs(xvar="ldmc", yvar="slope", ring_spp=salvia_spp, xlab="LDMC", ylab="Slope", show_x=TRUE, show_y=TRUE, add_r2=F)
+figE <- build_panel_two_regs(xvar="sla", yvar="slope", ring_spp=salvia_spp, xlab="SLA", ylab="Slope", show_x=TRUE, show_y=FALSE, add_r2=F)
 
 # ============================================================
 # 7. Patchwork Layout
@@ -3244,10 +3276,10 @@ p_final <- (A1 | legend_plot) / (B1 | C1) / (D1 | E1) +
 
 p_final
 
-ggsave(filename = here::here("output", "figures", "SI", "Fig_S11_traits_by_leafhabit.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
+ggsave(filename = here::here("output", "figures", "SI", "unused_traits_by_leafhabit.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
 ```
 
-###Fig. 9 v5. Genus:
+###Fig 8 v5 (unused). Genus:
 
 ```{r}
 # ============================================================
@@ -3271,7 +3303,7 @@ q3_df <- q3_df %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     ),
     # Extract the first 3 letters of the species code to create the genus
@@ -3282,7 +3314,7 @@ q3_df_outs <- q3_df_outs %>%
   mutate(
     intercept_lfm_pct = intercept_lfm * 100,
     functional_type = case_when(
-      functional_type %in% c("gymnosperm") ~ "Conifer", 
+      functional_type %in% c("gymnosperm") ~ "Gymnosperm", 
       TRUE ~ as.character("Angiosperm")
     ),
     genus = substr(species, 1, 3)
@@ -3305,7 +3337,7 @@ sig_linetypes <- c(
 
 # Shapes for Plant Group
 ft_shapes <- c(
-  "Conifer"    = 17,     # Solid triangle
+  "Gymnosperm"    = 17,     # Solid triangle
   "Angiosperm" = 16      # Solid circle
 )
 
@@ -3511,7 +3543,7 @@ p_final <- (A1 | legend_plot) / (B1 | C1) / (D1 | E1) +
 
 p_final
 
-ggsave(filename = here::here("output", "figures", "SI", "Fig_S10c_traits_by_genus.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
+ggsave(filename = here::here("output", "figures", "SI", "unused_traits_by_genus.jpg"), plot = p_final, dpi = 600, width = 6, height = 8)
 ```
 
 ###Fig SX, like 8: SLA and LDMC but with Max LFM
@@ -3990,7 +4022,7 @@ p_final
 # 4) Save
 # ----------------------------
 ggsave(
-# filename = here::here("output", "figures", "main", "Fig_09b_leaf_traits_LFMmax.jpg"),  # disabled
+# filename = here::here("output", "figures", "main", "Fig_08b_leaf_traits_LFMmax.jpg"),  # disabled
   filename = tempfile(fileext = ".jpg"),
   plot = p_final,
   dpi = 600,

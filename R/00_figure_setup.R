@@ -58,7 +58,7 @@ color_species <- scale_color_manual(
     QUEKEL = "#af4f2f",
     SALLEU = "#d48f90",
     SALMEL = "#732f30",
-    UMBCAL = "#d8b847"
+    UMBCAL = "#46a39a"
   ),
   drop = FALSE
 )
@@ -89,7 +89,7 @@ color_genus_species <- scale_color_manual(
     "Quercus kelloggii"           = "#af4f2f",
     "Salvia leucophylla"          = "#d48f90",
     "Salvia mellifera"            = "#732f30",
-    "Umbellularia californica"    = "#d8b847"
+    "Umbellularia californica"    = "#46a39a"
   ),
   drop = FALSE
 )
@@ -119,3 +119,24 @@ color_line_size <- scale_color_manual(
 
 Cross <- list(c("#c969a1", "#ce4441", "#ee8577", "#eb7926", "#ffbb44",
                 "#859b6c", "#62929a", "#004f63", "#122456"))
+
+# --- Leaf habit (deciduous species split by phenology; used in Q1-Q3 and Table S6) ---
+
+winter_dec_spp  <- c("QUEDOU", "QUEGAR", "QUEKEL")
+drought_dec_spp <- c("SALLEU", "SALMEL", "ERIFAS")  # summer-deciduous / semi-deciduous
+
+leaf_habit_class <- function(sp) {
+  dplyr::case_when(
+    sp %in% winter_dec_spp  ~ "Winter-deciduous",
+    sp %in% drought_dec_spp ~ "Drought-deciduous",
+    TRUE ~ "Evergreen"
+  )
+}
+
+# Colorblind-safe: distinct under simulated deutan/protan/tritan vision (min dE 39)
+# and in greyscale (dark / light / mid lightness)
+color_leaf_habit <- c(
+  "Evergreen"         = "#00441B",
+  "Winter-deciduous"  = "#E69F00",
+  "Drought-deciduous" = "#9970AB"
+)

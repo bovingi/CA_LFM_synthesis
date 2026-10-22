@@ -20,9 +20,21 @@ data/study_species_n.csv
 data/concept_df.csv
 data/q3_df.csv
 data/q4_df.csv
+data/psi_min_by_species.csv
 
 # Manuscript drafts (not for version control)
 ignored_docs/
+
+# notes from analysis
+notes/
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Knitted reports
+R/*.html
+README.html
 
 # System
 .DS_Store

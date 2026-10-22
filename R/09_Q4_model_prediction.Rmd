@@ -51,8 +51,7 @@ library(here)
 # We must drop NAs for all variables used in ANY of the 9 models
 # so they are all compared on the exact same dataset.
 df_mod <- q4_df %>%
-  filter(plc50_stem >= -8 & plc50_stem <= -1) %>%
-  filter(sla > 0 & sla < 100) %>% 
+  filter(!species %in% c("SALLEU", "SALMEL")) %>%  # Salvias are outliers (see Q3)
   filter(
     !is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), 
     !is.na(ldmc), !is.na(psi_tlp), !is.na(functional_type), !is.na(species)
@@ -67,56 +66,69 @@ df_mod <- q4_df %>%
   )
 
 # VIF Check
-library(car)
-species_traits <- df_mod %>% select(species, sla, ldmc) %>% distinct()
-cat("SLA-LDMC correlation:", cor(species_traits$sla, species_traits$ldmc), "\n")
-
-mod_vif_check <- lmer(
-  ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
-  data = df_mod, REML = TRUE
-)
-cat("VIF:\n")
-print(vif(mod_vif_check))
+# Traits vary only among species, so check collinearity on one row per species
+# (observation-level VIFs weight species by sample size and pseudoreplicate).
+# VIF = diagonal of the inverse correlation matrix of the predictors.
+species_traits <- df_mod %>%
+  distinct(species, plc50_stem, sla, ldmc, psi_tlp, functional_type) %>%
+  mutate(gymnosperm = as.numeric(functional_type == "gymnosperm")) %>%
+  select(plc50_stem, sla, ldmc, psi_tlp, gymnosperm)
+cat("Species n:", nrow(species_traits), "\n")
+cat("Trait correlations (species level):\n")
+print(round(cor(species_traits), 2))
+cat("VIF (species level):\n")
+print(round(diag(solve(cor(species_traits))), 2))
 
 # ---------------------------------------------------------
 # 2. Define Your 9 A Priori Models
 # ---------------------------------------------------------
 formulas <- list(
-  "P50 + SLA + LDMC + TLP" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * tlp_z + (1 | species),
+  "P50 + SLA + LDMC + TLP" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * tlp_z + (mwp_z | species),
   
-  "P50 + SLA + LDMC + TLP + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (1 | species),
+  "P50 + SLA + LDMC + TLP + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (mwp_z | species),
   
-  "P50 + SLA + LDMC + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (1 | species),
+  "P50 + SLA + LDMC + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (mwp_z | species),
   
-  "TLP + SLA + LDMC + F. Type" = ilfm ~ mwp_z * tlp_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (1 | species),
+  "TLP + SLA + LDMC + F. Type" = ilfm ~ mwp_z * tlp_z + mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (mwp_z | species),
   
-  "P50 + SLA + LDMC" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+  "P50 + SLA + LDMC" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (mwp_z | species),
   
-  "SLA + LDMC + F. Type" = ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (1 | species),
+  "SLA + LDMC + F. Type" = ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + (mwp_z | species),
   
-  "LDMC + F. Type" = ilfm ~ mwp_z * ldmc_z +  functional_type * mwp_z + (1 | species),
+  "LDMC + F. Type" = ilfm ~ mwp_z * ldmc_z +  functional_type * mwp_z + (mwp_z | species),
   
-  "SLA + F. Type" = ilfm ~ mwp_z * sla_z + functional_type * mwp_z + (1 | species),
+  "SLA + F. Type" = ilfm ~ mwp_z * sla_z + functional_type * mwp_z + (mwp_z | species),
   
-  "SLA Only" = ilfm ~ mwp_z * sla_z + (1 | species),
+  "SLA Only" = ilfm ~ mwp_z * sla_z + (mwp_z | species),
   
   # P50 + TLP + F. Type (Hydraulics only, no leaf economics)
-  "TLP + P50 + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * tlp_z + functional_type * mwp_z + (1 | species),
+  "TLP + P50 + F. Type" = ilfm ~ mwp_z * p50_z + mwp_z * tlp_z + functional_type * mwp_z + (mwp_z | species),
   
-  "TLP Only" = ilfm ~ mwp_z * tlp_z + (1 | species),
+  "TLP Only" = ilfm ~ mwp_z * tlp_z + (mwp_z | species),
   
-  "P50 Only" = ilfm ~ mwp_z * p50_z+ (1 | species),
+  "P50 Only" = ilfm ~ mwp_z * p50_z+ (mwp_z | species),
   
-  "LDMC Only" = ilfm ~ mwp_z * ldmc_z+ (1 | species),
+  "LDMC Only" = ilfm ~ mwp_z * ldmc_z+ (mwp_z | species),
   
-  "F.Type Only" = ilfm ~ mwp_z * functional_type + (1 | species),
+  "F.Type Only" = ilfm ~ mwp_z * functional_type + (mwp_z | species),
   
-  "WP Only (Null)" = ilfm ~ mwp_z + (1 | species)
+  "WP Only (Null)" = ilfm ~ mwp_z + (mwp_z | species)
 )
+formulas_all <- formulas
 
 # ---------------------------------------------------------
 # 3. Evaluate Models and Run Cross-Validation
 # ---------------------------------------------------------
+# Random slopes (mwp_z | species) need a more robust optimizer
+ctrl_rs <- lmerControl(optimizer = "bobyqa")
+
+# Cross-validated R2 with every species weighted equally (weights = 1 / n obs per species),
+# so species with many observations do not dominate the score
+r2_species_weighted <- function(obs, pred, species) {
+  w <- 1 / as.numeric(table(species)[as.character(species)])
+  1 - sum(w * (obs - pred)^2) / sum(w * (obs - weighted.mean(obs, w))^2)
+}
+
 results_list <- list()
 species_list <- unique(df_mod$species)
 
@@ -127,7 +139,7 @@ for(model_name in names(formulas)) {
   current_formula <- formulas[[model_name]]
   
   # A. Fit Full Model (REML = FALSE is required to compare fixed effects with AIC)
-  full_mod <- lmer(current_formula, data = df_mod, REML = FALSE)
+  full_mod <- lmer(current_formula, data = df_mod, REML = FALSE, control = ctrl_rs)
   
   # B. Calculate AIC & In-Sample R2
   mod_aic <- AIC(full_mod)
@@ -141,17 +153,19 @@ for(model_name in names(formulas)) {
     train_data <- df_mod %>% filter(species != sp)
     test_data  <- df_mod %>% filter(species == sp)
     
-    cv_mod <- lmer(current_formula, data = train_data, REML = FALSE)
+    cv_mod <- lmer(current_formula, data = train_data, REML = FALSE, control = ctrl_rs)
     cv_preds[df_mod$species == sp] <- predict(cv_mod, newdata = test_data, allow.new.levels = TRUE)
   }
-  cv_r2 <- cor(df_mod$ilfm, cv_preds)^2
+  cv_r2 <- r2_species_weighted(df_mod$ilfm, cv_preds, df_mod$species)
+  cv_r2_pooled <- cor(df_mod$ilfm, cv_preds)^2
   
   # D. Store Results
   results_list[[model_name]] <- data.frame(
     Model = model_name,
     AIC = mod_aic,
     In_Sample_R2 = in_sample_r2,
-    Cross_Val_R2 = cv_r2
+    Cross_Val_R2 = cv_r2,
+    Cross_Val_R2_pooled = cv_r2_pooled
   )
 }
 
@@ -170,14 +184,16 @@ final_df <- model_comparison_df %>%
     AIC = round(AIC, 1),
     Delta_AIC = round(Delta_AIC, 1),
     In_Sample_R2 = round(In_Sample_R2, 3),
-    Cross_Val_R2 = round(Cross_Val_R2, 3)
+    Cross_Val_R2 = round(Cross_Val_R2, 3),
+    Cross_Val_R2_pooled = round(Cross_Val_R2_pooled, 3)
   ) %>%
   # Clean up headers
   rename(
     `Candidate Model` = Model,
     `Delta AIC` = Delta_AIC,
     `In-Sample R-squared` = In_Sample_R2,
-    `Cross-Val R-squared` = Cross_Val_R2
+    `Cross-Val R-squared (species-weighted)` = Cross_Val_R2,
+    `Cross-Val R-squared (pooled obs)` = Cross_Val_R2_pooled
   )
 
 rownames(final_df) <- NULL
@@ -185,7 +201,7 @@ rownames(final_df) <- NULL
 # ---------------------------------------------------------
 # 5. Create and Save the Publication kable Table
 # ---------------------------------------------------------
-pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %>%
+pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lccccc") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
   # Highlight the best model row in bold
   row_spec(1, bold = TRUE) 
@@ -194,8 +210,8 @@ pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %
 pub_table
 
 # Save as an HTML file for easy copy/pasting into Word
-write.csv(final_df, here("output", "tables", "Table_S07_model_comparison.csv"), row.names = FALSE)
-tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
+write.csv(final_df, here("output", "tables", "Table_S07_model_comparison_all.csv"), row.names = FALSE)
+tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison_all.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
 
 cat("Done! Table saved to figures/Table_Hypothesis_Models.html\n")
 
@@ -208,22 +224,24 @@ min_aic <- min(model_comparison_df$AIC)
 
 final_df <- model_comparison_df %>%
   mutate(Delta_AIC = AIC - min_aic) %>%
-  # Explicitly keep models within 10 AIC, PLUS your two baselines
-  filter(Delta_AIC <= 10 | Model %in% c("WP Only (Null)", "F. Type Only")) %>%
+  # Table S7: models within 10 AIC of the best, plus the null
+  filter(Delta_AIC <= 10 | Model == "WP Only (Null)") %>%
   arrange(Delta_AIC) %>%
   # Round numbers for clean presentation
   mutate(
     AIC = round(AIC, 1),
     Delta_AIC = round(Delta_AIC, 1),
     In_Sample_R2 = round(In_Sample_R2, 3),
-    Cross_Val_R2 = round(Cross_Val_R2, 3)
+    Cross_Val_R2 = round(Cross_Val_R2, 3),
+    Cross_Val_R2_pooled = round(Cross_Val_R2_pooled, 3)
   ) %>%
   # Clean up headers
   rename(
     `Candidate Model` = Model,
     `Delta AIC` = Delta_AIC,
     `In-Sample R-squared` = In_Sample_R2,
-    `Cross-Val R-squared` = Cross_Val_R2
+    `Cross-Val R-squared (species-weighted)` = Cross_Val_R2,
+    `Cross-Val R-squared (pooled obs)` = Cross_Val_R2_pooled
   )
 
 rownames(final_df) <- NULL
@@ -231,7 +249,7 @@ rownames(final_df) <- NULL
 # ---------------------------------------------------------
 # 5. Create and Save the Publication kable Table
 # ---------------------------------------------------------
-pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %>%
+pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lccccc") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
   row_spec(1, bold = TRUE) 
 
@@ -239,8 +257,8 @@ pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %
 pub_table
 
 # Save as an HTML file for easy copy/pasting into Word
-write.csv(final_df, here("output", "tables", "Table_S07_model_comparison_filtered.csv"), row.names = FALSE)
-tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison_filtered.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
+write.csv(final_df, here("output", "tables", "Table_S07_model_comparison.csv"), row.names = FALSE)
+tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
 
 cat("Done! Table saved to figures/Table_Hypothesis_Models_Filtered.html\n")
 ```
@@ -261,35 +279,35 @@ library(here)
 # ---------------------------------------------------------
 df <- q4_df
 
+# Fig 9 applies the CV-selected model (LDMC + functional type) to every species it can be
+# fit to: only Psi, LDMC and functional type are required, so this includes the two Salvia
+# and species without P50/SLA/TLP (23 species), unlike the Table S7 comparison (17).
 df_mod <- df %>%
-  # Drop missing values
-  filter(!is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), !is.na(ldmc), !is.na(species), !is.na(psi_tlp)) %>%
+  filter(!is.na(mwp), !is.na(ilfm), !is.na(ldmc), !is.na(functional_type), !is.na(species)) %>%
   # Standardize continuous predictors (z-scores)
   mutate(
     mwp_z = as.numeric(scale(mwp)),
-    p50_z = as.numeric(scale(plc50_stem)),
-    sla_z = as.numeric(scale(sla)),
-    tlp_z = as.numeric(scale(psi_tlp)),
     ldmc_z = as.numeric(scale(ldmc))
   ) %>%
   # Create the grouping variable for the plot colors
   mutate(
     plot_group = case_when(
-      grepl("gymnosperm", functional_type, ignore.case = TRUE) ~ "Conifer",
+      grepl("gymnosperm", functional_type, ignore.case = TRUE) ~ "Gymnosperm",
       grepl("sal", species, ignore.case = TRUE) ~ "Salvia",
       TRUE ~ "Other Angiosperm"
     ),
     # Make it a factor to control the legend order
-    plot_group = factor(plot_group, levels = c("Conifer", "Salvia", "Other Angiosperm"))
+    plot_group = factor(plot_group, levels = c("Gymnosperm", "Salvia", "Other Angiosperm"))
   )
 
 # ---------------------------------------------------------
 # 2. Frequentist Framework (lmer)
 # ---------------------------------------------------------
 freq_mod <- lmer(
-  ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (1 | species),
+  ilfm ~ mwp_z * ldmc_z + functional_type * mwp_z + (mwp_z | species),
   data = df_mod,
-  REML = TRUE
+  REML = TRUE,
+  control = ctrl_rs
 )
 
 # summary() will now give you p-values
@@ -312,17 +330,40 @@ for(sp in species_list) {
   test_data <- df_mod %>% filter(species == sp)
   
   temp_mod <- lmer(
-    ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + functional_type * mwp_z + mwp_z * tlp_z + (1 | species),
+    ilfm ~ mwp_z * ldmc_z + functional_type * mwp_z + (mwp_z | species),
     data = train_data,
-    REML = FALSE
+    REML = FALSE,
+    control = ctrl_rs
   )
   
   preds <- predict(temp_mod, newdata = test_data, allow.new.levels = TRUE)
   df_mod$cv_predicted_ilfm[df_mod$species == sp] <- preds
 }
 
-cv_r2 <- cor(df_mod$ilfm, df_mod$cv_predicted_ilfm)^2
+cv_r2 <- r2_species_weighted(df_mod$ilfm, df_mod$cv_predicted_ilfm, df_mod$species)
 cv_rmse <- rmse(df_mod$ilfm, df_mod$cv_predicted_ilfm)
+
+# Psi-only comparison on the same species (in-sample and leave-one-species-out)
+null_mod <- lmer(ilfm ~ mwp_z + (mwp_z | species), data = df_mod, REML = TRUE, control = ctrl_rs)
+null_in_r2 <- cor(df_mod$ilfm, predict(null_mod))^2
+df_mod$cv_null_ilfm <- NA
+for (sp in species_list) {
+  m0 <- lmer(ilfm ~ mwp_z + (mwp_z | species), data = filter(df_mod, species != sp),
+             REML = FALSE, control = ctrl_rs)
+  df_mod$cv_null_ilfm[df_mod$species == sp] <- predict(m0, newdata = filter(df_mod, species == sp),
+                                                       allow.new.levels = TRUE)
+}
+null_cv_r2 <- r2_species_weighted(df_mod$ilfm, df_mod$cv_null_ilfm, df_mod$species)
+null_cv_rmse <- rmse(df_mod$ilfm, df_mod$cv_null_ilfm)
+cat(sprintf("Fig 9: %d species, %d obs; in-sample R2 %.3f (Psi-only %.3f); CV R2 %.3f (Psi-only %.3f); CV RMSE %.3f (Psi-only %.3f)\n",
+            n_distinct(df_mod$species), nrow(df_mod), in_sample_r2, null_in_r2, cv_r2, null_cv_r2,
+            cv_rmse, null_cv_rmse))
+df_mod %>%
+  mutate(salvia = species %in% c("SALLEU", "SALMEL")) %>%
+  group_by(salvia) %>%
+  summarise(bias_model = mean(ilfm - cv_predicted_ilfm), rmse_model = rmse(ilfm, cv_predicted_ilfm),
+            bias_psi_only = mean(ilfm - cv_null_ilfm), rmse_psi_only = rmse(ilfm, cv_null_ilfm)) %>%
+  print()
 
 # ---------------------------------------------------------
 # 4. Build Publication-Ready Plots
@@ -332,19 +373,17 @@ min_val <- min(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), 
 max_val <- max(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), na.rm = TRUE)
 
 anno_text_insample <- sprintf("In-Sample R2 = %.2f\nRMSE = %.2f", in_sample_r2, in_sample_rmse)
-anno_text_cv <- sprintf("Predictive R2 = %.2f\nRMSE = %.2f", cv_r2, cv_rmse)
+anno_text_cv <- sprintf("Predictive R2 = %.2f (species-weighted)\nRMSE = %.2f\nΨ-only: R2 = %.2f, RMSE = %.2f", cv_r2, cv_rmse, null_cv_r2, null_cv_rmse)
 
 # Custom color palette
 my_colors <- c(
-  "Conifer" = "#636B2F",       # Light Green
+  "Gymnosperm" = "#636B2F",       # Light Green
   "Salvia" = "#F768A1",           # Pink
   "Other Angiosperm" = "grey70"   # Default Grey
 )
  df_mod <- df_mod %>%
-  # Make sure the label is "Conifer" instead of "Gymnosperm"
   mutate(
-    plot_group = str_replace(plot_group, "Gymnosperm", "Conifer"),
-    plot_group = factor(plot_group, levels = c("Conifer", "Salvia", "Other Angiosperm"))
+    plot_group = factor(plot_group, levels = c("Gymnosperm", "Salvia", "Other Angiosperm"))
   ) %>%
   # Sorting by desc(plot_group) puts "Other Angiosperm" first in the dataframe
   arrange(desc(plot_group))
@@ -355,8 +394,8 @@ plot_insample_pub <- ggplot(df_mod, aes(x = predicted_ilfm, y = ilfm)) +
   scale_fill_manual(values = my_colors) +
   geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
   geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
-  annotate("text", x = min_val, y = max_val, label = anno_text_insample, 
-           hjust = 0, vjust = 1, size = 5) +
+  annotate("label", x = min_val, y = max_val, label = anno_text_insample,
+           hjust = 0, vjust = 1, size = 5, fill = alpha("white", 0.85), label.size = 0) +
   labs(
     x = "Predicted iLFM (In-Sample)",
     y = "Observed iLFM",
@@ -377,8 +416,8 @@ plot_cv_pub <- ggplot(df_mod, aes(x = cv_predicted_ilfm, y = ilfm)) +
   scale_fill_manual(values = my_colors) +
   geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
   geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
-  annotate("text", x = min_val, y = max_val, label = anno_text_cv, 
-           hjust = 0, vjust = 1, size = 5) +
+  annotate("label", x = min_val, y = max_val, label = anno_text_cv,
+           hjust = 0, vjust = 1, size = 5, fill = alpha("white", 0.85), label.size = 0) +
   labs(
     x = "Predicted iLFM (Unseen Species)",
     y = "Observed iLFM",
@@ -404,7 +443,7 @@ combined_plot <- plot_insample_pub + plot_cv_pub +
 combined_plot
 
 ggsave(
-  filename = here("output", "figures", "main", "Fig_10_observed_vs_predicted.png"), 
+  filename = here("output", "figures", "main", "Fig_09_observed_vs_predicted.png"), 
   plot     = combined_plot,
   width    = 13,   # Added an extra inch of width to make room for the legend
   height   = 6,   
@@ -413,7 +452,84 @@ ggsave(
 )
 ```
 
-##Bayesian approach: 
+####v3 (SI sensitivity): drought-deciduous species in pink
+```{r}
+# Same model and plots as Fig 9, but species are filtered only on the variables the
+# model uses (Psi, LDMC, functional type), so species lacking P50/SLA/TLP stay in.
+# Pink = all drought-deciduous species (leaf_habit_class() in 00_figure_setup.R).
+leaf_habit_class <- local({ source(here("R", "00_figure_setup.R"), local = TRUE); leaf_habit_class })
+
+df_dd <- q4_df %>%
+  filter(!is.na(mwp), !is.na(ilfm), !is.na(ldmc), !is.na(species), !is.na(functional_type)) %>%
+  mutate(
+    mwp_z  = as.numeric(scale(mwp)),
+    ldmc_z = as.numeric(scale(ldmc)),
+    plot_group = case_when(
+      grepl("gymnosperm", functional_type, ignore.case = TRUE) ~ "Gymnosperm",
+      leaf_habit_class(species) == "Drought-deciduous" ~ "Drought-deciduous",
+      TRUE ~ "Other Angiosperm"
+    ),
+    plot_group = factor(plot_group, levels = c("Gymnosperm", "Drought-deciduous", "Other Angiosperm"))
+  )
+
+cat("Species:", n_distinct(df_dd$species), "| added vs Fig 9:",
+    paste(setdiff(unique(df_dd$species), unique(df_mod$species)), collapse = ", "), "\n")
+
+dd_formula <- ilfm ~ mwp_z * ldmc_z + functional_type * mwp_z + (mwp_z | species)
+
+dd_mod <- lmer(dd_formula, data = df_dd, REML = TRUE, control = ctrl_rs)
+df_dd$predicted_ilfm <- predict(dd_mod)
+
+# Leave-one-species-out
+df_dd$cv_predicted_ilfm <- NA
+for (sp in unique(df_dd$species)) {
+  temp_mod <- lmer(dd_formula, data = df_dd %>% filter(species != sp), REML = FALSE, control = ctrl_rs)
+  df_dd$cv_predicted_ilfm[df_dd$species == sp] <-
+    predict(temp_mod, newdata = df_dd %>% filter(species == sp), allow.new.levels = TRUE)
+}
+
+dd_in_r2   <- cor(df_dd$ilfm, df_dd$predicted_ilfm)^2
+dd_in_rmse <- rmse(df_dd$ilfm, df_dd$predicted_ilfm)
+dd_cv_r2   <- r2_species_weighted(df_dd$ilfm, df_dd$cv_predicted_ilfm, df_dd$species)
+dd_cv_rmse <- rmse(df_dd$ilfm, df_dd$cv_predicted_ilfm)
+
+dd_lims <- range(c(df_dd$ilfm, df_dd$predicted_ilfm, df_dd$cv_predicted_ilfm), na.rm = TRUE)
+dd_colors <- c("Gymnosperm" = "#636B2F", "Drought-deciduous" = "#F768A1", "Other Angiosperm" = "grey70")
+df_dd <- df_dd %>% arrange(desc(plot_group))  # grey points drawn first
+
+dd_panel <- function(xvar, xlab, label) {
+  ggplot(df_dd, aes(x = .data[[xvar]], y = ilfm)) +
+    geom_point(aes(fill = plot_group), alpha = 0.6, shape = 21, color = "black", size = 2.5) +
+    scale_fill_manual(values = dd_colors) +
+    geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed", linewidth = 0.8) +
+    geom_smooth(method = "lm", se = FALSE, color = "#2C7FB8", linewidth = 1.2) +
+    annotate("text", x = dd_lims[1], y = dd_lims[2], label = label, hjust = 0, vjust = 1, size = 5) +
+    labs(x = xlab, y = "Observed iLFM", fill = "Plant Group") +
+    coord_fixed(xlim = dd_lims, ylim = dd_lims) +
+    theme_classic(base_size = 14) +
+    theme(
+      axis.text = element_text(color = "black"),
+      axis.ticks = element_line(color = "black"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
+    )
+}
+
+dd_plot <- dd_panel("predicted_ilfm", "Predicted iLFM (In-Sample)",
+                    sprintf("In-Sample R2 = %.2f\nRMSE = %.2f", dd_in_r2, dd_in_rmse)) +
+  dd_panel("cv_predicted_ilfm", "Predicted iLFM (Unseen Species)",
+           sprintf("Predictive R2 = %.2f (species-weighted)\nRMSE = %.2f", dd_cv_r2, dd_cv_rmse)) +
+  plot_annotation(tag_levels = "A") +
+  plot_layout(guides = "collect")
+
+dd_plot
+
+ggsave(
+  filename = here("output", "figures", "SI", "unused_fig9_drought_deciduous.png"),
+  plot = dd_plot, width = 13, height = 6, units = "in", dpi = 300
+)
+```
+
+##Bayesian approach:
 
 
 #Version with just angiosperms: 
@@ -434,8 +550,7 @@ library(here)
 # We must drop NAs for all variables used in ANY of the 9 models
 # so they are all compared on the exact same dataset.
 df_mod <- q4_df %>%
-  filter(plc50_stem >= -8 & plc50_stem <= -1) %>%
-  filter(sla > 0 & sla < 100) %>% 
+  filter(!species %in% c("SALLEU", "SALMEL")) %>%  # Salvias are outliers (see Q3)
   filter(
     !is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla), 
     !is.na(ldmc), !is.na(psi_tlp), !is.na(functional_type), !is.na(species)
@@ -454,34 +569,35 @@ df_mod <- q4_df %>%
 # 2. Define Your 9 A Priori Models
 # ---------------------------------------------------------
 formulas <- list(
-  "P50 + SLA + LDMC + TLP" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * tlp_z + (1 | species),
+  "P50 + SLA + LDMC + TLP" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * tlp_z + (mwp_z | species),
 
-  "P50 + SLA + LDMC" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+  "P50 + SLA + LDMC" = ilfm ~ mwp_z * p50_z + mwp_z * sla_z + mwp_z * ldmc_z + (mwp_z | species),
 
-  "TLP + SLA + LDMC" = ilfm ~ mwp_z * tlp_z + mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+  "TLP + SLA + LDMC" = ilfm ~ mwp_z * tlp_z + mwp_z * sla_z + mwp_z * ldmc_z + (mwp_z | species),
 
-  "SLA + LDMC" = ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + (1 | species),
+  "SLA + LDMC" = ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z + (mwp_z | species),
 
-  "TLP + P50" = ilfm ~ mwp_z * p50_z + mwp_z * tlp_z + (1 | species),
+  "TLP + P50" = ilfm ~ mwp_z * p50_z + mwp_z * tlp_z + (mwp_z | species),
 
-  "SLA + TLP" = ilfm ~ mwp_z * sla_z + mwp_z * tlp_z + (1 | species),
+  "SLA + TLP" = ilfm ~ mwp_z * sla_z + mwp_z * tlp_z + (mwp_z | species),
 
-  "LDMC + TLP" = ilfm ~ mwp_z * ldmc_z + mwp_z * tlp_z + (1 | species),
+  "LDMC + TLP" = ilfm ~ mwp_z * ldmc_z + mwp_z * tlp_z + (mwp_z | species),
 
-  "SLA + P50" = ilfm ~ mwp_z * sla_z + mwp_z * p50_z + (1 | species),
+  "SLA + P50" = ilfm ~ mwp_z * sla_z + mwp_z * p50_z + (mwp_z | species),
 
-  "LDMC + P50" = ilfm ~ mwp_z * ldmc_z + mwp_z * p50_z + (1 | species),
+  "LDMC + P50" = ilfm ~ mwp_z * ldmc_z + mwp_z * p50_z + (mwp_z | species),
 
-  "SLA Only" = ilfm ~ mwp_z * sla_z + (1 | species),
+  "SLA Only" = ilfm ~ mwp_z * sla_z + (mwp_z | species),
 
-  "TLP Only" = ilfm ~ mwp_z * tlp_z + (1 | species),
+  "TLP Only" = ilfm ~ mwp_z * tlp_z + (mwp_z | species),
 
-  "P50 Only" = ilfm ~ mwp_z * p50_z + (1 | species),
+  "P50 Only" = ilfm ~ mwp_z * p50_z + (mwp_z | species),
 
-  "LDMC Only" = ilfm ~ mwp_z * ldmc_z + (1 | species),
+  "LDMC Only" = ilfm ~ mwp_z * ldmc_z + (mwp_z | species),
 
-  "WP Only (Null)" = ilfm ~ mwp_z + (1 | species)
+  "WP Only (Null)" = ilfm ~ mwp_z + (mwp_z | species)
 )
+formulas_angio <- formulas
 
 # ---------------------------------------------------------
 # 3. Evaluate Models and Run Cross-Validation
@@ -496,7 +612,7 @@ for(model_name in names(formulas)) {
   current_formula <- formulas[[model_name]]
   
   # A. Fit Full Model (REML = FALSE is required to compare fixed effects with AIC)
-  full_mod <- lmer(current_formula, data = df_mod, REML = FALSE)
+  full_mod <- lmer(current_formula, data = df_mod, REML = FALSE, control = ctrl_rs)
   
   # B. Calculate AIC & In-Sample R2
   mod_aic <- AIC(full_mod)
@@ -510,17 +626,19 @@ for(model_name in names(formulas)) {
     train_data <- df_mod %>% filter(species != sp)
     test_data  <- df_mod %>% filter(species == sp)
     
-    cv_mod <- lmer(current_formula, data = train_data, REML = FALSE)
+    cv_mod <- lmer(current_formula, data = train_data, REML = FALSE, control = ctrl_rs)
     cv_preds[df_mod$species == sp] <- predict(cv_mod, newdata = test_data, allow.new.levels = TRUE)
   }
-  cv_r2 <- cor(df_mod$ilfm, cv_preds)^2
+  cv_r2 <- r2_species_weighted(df_mod$ilfm, cv_preds, df_mod$species)
+  cv_r2_pooled <- cor(df_mod$ilfm, cv_preds)^2
   
   # D. Store Results
   results_list[[model_name]] <- data.frame(
     Model = model_name,
     AIC = mod_aic,
     In_Sample_R2 = in_sample_r2,
-    Cross_Val_R2 = cv_r2
+    Cross_Val_R2 = cv_r2,
+    Cross_Val_R2_pooled = cv_r2_pooled
   )
 }
 
@@ -539,14 +657,16 @@ final_df <- model_comparison_df %>%
     AIC = round(AIC, 1),
     Delta_AIC = round(Delta_AIC, 1),
     In_Sample_R2 = round(In_Sample_R2, 3),
-    Cross_Val_R2 = round(Cross_Val_R2, 3)
+    Cross_Val_R2 = round(Cross_Val_R2, 3),
+    Cross_Val_R2_pooled = round(Cross_Val_R2_pooled, 3)
   ) %>%
   # Clean up headers
   rename(
     `Candidate Model` = Model,
     `Delta AIC` = Delta_AIC,
     `In-Sample R-squared` = In_Sample_R2,
-    `Cross-Val R-squared` = Cross_Val_R2
+    `Cross-Val R-squared (species-weighted)` = Cross_Val_R2,
+    `Cross-Val R-squared (pooled obs)` = Cross_Val_R2_pooled
   )
 
 rownames(final_df) <- NULL
@@ -554,7 +674,7 @@ rownames(final_df) <- NULL
 # ---------------------------------------------------------
 # 5. Create and Save the Publication kable Table
 # ---------------------------------------------------------
-pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lcccc") %>%
+pub_table <- kable(final_df, format = "html", escape = FALSE, align = "lccccc") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
   # Highlight the best model row in bold
   row_spec(1, bold = TRUE) 
@@ -567,6 +687,83 @@ write.csv(final_df, here("output", "tables", "Table_S07_model_comparison_angiosp
 tryCatch(save_kable(pub_table, file = here("output", "tables", "Table_S07_model_comparison_angiosperms.html")), error = function(e) message("Note: HTML table skipped (pandoc not available)"))
 
 cat("Done! Table saved to figures/Table_Hypothesis_Models_nogymno.html\n")
+```
+
+#Table S8: model comparison with the two Salvia species included (Table S7 sensitivity)
+```{r table_s7_with_salvia}
+# Same candidate models, random structure and species-weighted LOSO CV as the main Table S7,
+# but keeping SALLEU and SALMEL (excluded from the main comparison as behavioural outliers)
+run_model_comparison <- function(d, fxs) {
+  sp_list <- unique(d$species)
+  res <- lapply(names(fxs), function(model_name) {
+    f <- fxs[[model_name]]
+    full_mod <- lmer(f, data = d, REML = FALSE, control = ctrl_rs)
+    cv_preds <- numeric(nrow(d))
+    for (sp in sp_list) {
+      cv_mod <- lmer(f, data = d[d$species != sp, ], REML = FALSE, control = ctrl_rs)
+      cv_preds[d$species == sp] <- predict(cv_mod, newdata = d[d$species == sp, ], allow.new.levels = TRUE)
+    }
+    data.frame(
+      Model               = model_name,
+      AIC                 = AIC(full_mod),
+      In_Sample_R2        = cor(d$ilfm, predict(full_mod))^2,
+      Cross_Val_R2        = r2_species_weighted(d$ilfm, cv_preds, d$species),
+      Cross_Val_R2_pooled = cor(d$ilfm, cv_preds)^2
+    )
+  })
+  do.call(rbind, res) %>%
+    mutate(Delta_AIC = AIC - min(AIC)) %>%
+    arrange(Delta_AIC) %>%
+    mutate(across(c(AIC, Delta_AIC), ~ round(.x, 1)),
+           across(c(In_Sample_R2, Cross_Val_R2, Cross_Val_R2_pooled), ~ round(.x, 3))) %>%
+    rename(`Candidate Model` = Model, `Delta AIC` = Delta_AIC,
+           `In-Sample R-squared` = In_Sample_R2,
+           `Cross-Val R-squared (species-weighted)` = Cross_Val_R2,
+           `Cross-Val R-squared (pooled obs)` = Cross_Val_R2_pooled)
+}
+
+# No P50 range filter here, so ADEFAS (-8.4 MPa) and CEACUN (-9.6 MPa) are kept (21 species)
+df_salvia <- q4_df %>%
+  filter(
+    !is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla),
+    !is.na(ldmc), !is.na(psi_tlp), !is.na(functional_type), !is.na(species)
+  ) %>%
+  mutate(
+    mwp_z    = as.numeric(scale(mwp)),
+    p50_z    = as.numeric(scale(plc50_stem)),
+    sla_z    = as.numeric(scale(sla)),
+    tlp_z    = as.numeric(scale(psi_tlp)),
+    ldmc_z   = as.numeric(scale(ldmc)),
+    functional_type = as.factor(functional_type)
+  )
+cat(sprintf("With Salvia: %d species (%d angiosperms)\n",
+            n_distinct(df_salvia$species),
+            n_distinct(df_salvia$species[df_salvia$functional_type == "angiosperm"])))
+
+s7_all_salvia   <- run_model_comparison(df_salvia, formulas_all)
+s7_angio_salvia <- run_model_comparison(df_salvia %>% filter(functional_type == "angiosperm"), formulas_angio)
+
+print(s7_all_salvia)
+print(s7_angio_salvia)
+
+write.csv(s7_all_salvia,   here("output", "tables", "Table_S08_model_comparison_withSalvia.csv"), row.names = FALSE)
+write.csv(s7_angio_salvia, here("output", "tables", "Table_S08_model_comparison_angiosperms_withSalvia.csv"), row.names = FALSE)
+
+# Table S8 (gymnosperms + angiosperms, Salvia included), formatted like Table S7:
+# models within 10 AIC of the best, plus the null
+s7_salvia_pub <- s7_all_salvia %>%
+  filter(`Delta AIC` <= 10 | `Candidate Model` == "WP Only (Null)") %>%
+  mutate(across(c(AIC, `Delta AIC`), ~ sprintf("%.1f", .x)),
+         across(contains("R-squared"), ~ sprintf("%.3f", .x)))
+pub_salvia <- kable(s7_salvia_pub, format = "html", escape = FALSE, align = "lccccc") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "left") %>%
+  row_spec(1, bold = TRUE)
+pub_salvia
+# save_kable needs pandoc; htmltools writes the same bootstrap-styled table without it
+htmltools::save_html(
+  htmltools::tagList(rmarkdown::html_dependency_jquery(), rmarkdown::html_dependency_bootstrap("simplex"),
+                     htmltools::HTML(as.character(pub_salvia))),
+  here("output", "tables", "Table_S08_model_comparison_withSalvia.html"))
 ```
 
 ####Fig nogymno: Colored points 
@@ -606,9 +803,10 @@ df_mod <- df %>%
 # 2. Frequentist Framework (lmer)
 # ---------------------------------------------------------
 freq_mod <- lmer(
-  ilfm ~  mwp_z * sla_z + mwp_z * ldmc_z + mwp_z * p50_z + mwp_z * tlp_z+ (1 | species), 
-  data = df_mod, 
-  REML = TRUE
+  ilfm ~ mwp_z * ldmc_z + (mwp_z | species),
+  data = df_mod,
+  REML = TRUE,
+  control = ctrl_rs
 )
 
 # summary() will now give you p-values
@@ -631,16 +829,17 @@ for(sp in species_list) {
   test_data <- df_mod %>% filter(species == sp)
   
   temp_mod <- lmer(
-    ilfm ~ mwp_z * sla_z + mwp_z * ldmc_z  + mwp_z * p50_z + mwp_z * tlp_z +(1 | species), 
+    ilfm ~ mwp_z * ldmc_z + (mwp_z | species),
     data = train_data,
-    REML = FALSE 
+    REML = FALSE,
+    control = ctrl_rs
   )
   
   preds <- predict(temp_mod, newdata = test_data, allow.new.levels = TRUE)
   df_mod$cv_predicted_ilfm[df_mod$species == sp] <- preds
 }
 
-cv_r2 <- cor(df_mod$ilfm, df_mod$cv_predicted_ilfm)^2
+cv_r2 <- r2_species_weighted(df_mod$ilfm, df_mod$cv_predicted_ilfm, df_mod$species)
 cv_rmse <- rmse(df_mod$ilfm, df_mod$cv_predicted_ilfm)
 
 # ---------------------------------------------------------
@@ -651,19 +850,17 @@ min_val <- min(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), 
 max_val <- max(c(df_mod$ilfm, df_mod$predicted_ilfm, df_mod$cv_predicted_ilfm), na.rm = TRUE)
 
 anno_text_insample <- sprintf("In-Sample R2 = %.2f\nRMSE = %.2f", in_sample_r2, in_sample_rmse)
-anno_text_cv <- sprintf("Predictive R2 = %.2f\nRMSE = %.2f", cv_r2, cv_rmse)
+anno_text_cv <- sprintf("Predictive R2 = %.2f (species-weighted)\nRMSE = %.2f", cv_r2, cv_rmse)
 
 # Custom color palette
 my_colors <- c(
-  "Conifer" = "#636B2F",       # Light Green
+  "Gymnosperm" = "#636B2F",       # Light Green
   "Salvia" = "#F768A1",           # Pink
   "Other Angiosperm" = "grey70"   # Default Grey
 )
  df_mod <- df_mod %>%
-  # Make sure the label is "Conifer" instead of "Gymnosperm"
   mutate(
-    plot_group = str_replace(plot_group, "Gymnosperm", "Conifer"),
-    plot_group = factor(plot_group, levels = c("Conifer", "Salvia", "Other Angiosperm"))
+    plot_group = factor(plot_group, levels = c("Gymnosperm", "Salvia", "Other Angiosperm"))
   ) %>%
   # Sorting by desc(plot_group) puts "Other Angiosperm" first in the dataframe
   arrange(desc(plot_group))
@@ -723,7 +920,7 @@ combined_plot <- plot_insample_pub + plot_cv_pub +
 combined_plot
 
 ggsave(
-  filename = here("output", "figures", "SI", "Fig_10_angiosperms_only.png"), 
+  filename = here("output", "figures", "SI", "unused_angiosperms_only.png"), 
   plot     = combined_plot,
   width    = 13,   # Added an extra inch of width to make room for the legend
   height   = 6,   
@@ -798,7 +995,7 @@ itv_long <- itv_df %>%
   pivot_longer(cols = c(sla_cv, ldmc_cv, p50_cv),
                names_to = "trait", values_to = "cv") %>%
   filter(!is.na(cv)) %>%
-  mutate(trait = recode(trait,
+  mutate(trait = dplyr::recode(trait,
     "sla_cv"  = "SLA",
     "ldmc_cv" = "LDMC",
     "p50_cv"  = "P50"
@@ -826,35 +1023,59 @@ slopes in this dataset) and sample size (n = 2) is insufficient for a valid trai
 
 ### Equation 1: Real-time LFM (requires contemporaneous ψ)
 
-Best angiosperm model from Table S7 (SLA + LDMC × Ψ).
+Best angiosperm model in Table S7 by species-weighted leave-one-species-out R² (LDMC × Ψ,
+species random slopes), fit to the same species as Table S7.
 
 ```{r supp_eq1_realtime_lfm}
 library(lme4)
 library(lmerTest)
 
-df_angio <- df_mod %>%
-  filter(functional_type == "angiosperm")
+# Same species as the Table S7 angiosperm comparison (Salvia excluded,
+# complete traits); z-scores computed on these data so the equation is self-contained
+df_angio <- q4_df %>%
+  filter(!species %in% c("SALLEU", "SALMEL")) %>%
+  filter(
+    !is.na(mwp), !is.na(ilfm), !is.na(plc50_stem), !is.na(sla),
+    !is.na(ldmc), !is.na(psi_tlp), !is.na(functional_type), !is.na(species)
+  ) %>%
+  filter(functional_type == "angiosperm") %>%
+  mutate(
+    mwp_z  = as.numeric(scale(mwp)),
+    ldmc_z = as.numeric(scale(ldmc))
+  )
+cat(sprintf("Eq S2 data: %d observations, %d species\n", nrow(df_angio), n_distinct(df_angio$species)))
 
-# Refit best angiosperm model (SLA + LDMC, from Table_S07_model_comparison_angiosperms)
+# Refit CV-best angiosperm model (LDMC only, Table_S07_model_comparison_angiosperms)
 mod_eq1 <- lmer(
-  ilfm ~ mwp_z + mwp_z:sla_z + mwp_z:ldmc_z + (1 | species),
+  ilfm ~ mwp_z * ldmc_z + (mwp_z | species),
   data = df_angio,
-  REML = TRUE
+  REML = TRUE,
+  control = ctrl_rs
 )
 
 # Fixed-effect coefficients
-cat("=== Supplemental Equation 1: Real-Time iLFM (Angiosperms) ===\n")
-cat("iLFM = β0 + β1·Ψz + β2·(Ψz × SLAz) + β3·(Ψz × LDMCz) + u_s\n")
-cat("  where _z = z-standardized, u_s = species random intercept (0 for novel species)\n\n")
+cat("=== Supplemental Equation S2: Real-Time iLFM (Angiosperms) ===\n")
+cat("iLFM = β0 + β1·Ψz + β2·LDMCz + β3·(Ψz × LDMCz) + u_s + v_s·Ψz\n")
+cat("  where _z = z-standardized; u_s, v_s = species random intercept and slope (0 for novel species)\n\n")
 
 coefs_eq1 <- round(fixef(mod_eq1), 4)
 print(coefs_eq1)
+
+# Same equation in raw units (Ψ in MPa, LDMC in g/g), from the unrounded coefficients
+fe <- fixef(mod_eq1)
+mu_p <- mean(df_angio$mwp);  sd_p <- sd(df_angio$mwp)
+mu_l <- mean(df_angio$ldmc); sd_l <- sd(df_angio$ldmc)
+raw_int  <- fe[1] - fe[2] * mu_p / sd_p - fe[3] * mu_l / sd_l + fe[4] * mu_p * mu_l / (sd_p * sd_l)
+raw_psi  <- fe[2] / sd_p - fe[4] * mu_l / (sd_p * sd_l)
+raw_ldmc <- fe[3] / sd_l - fe[4] * mu_p / (sd_p * sd_l)
+raw_int2 <- fe[4] / (sd_p * sd_l)
+cat(sprintf("Raw units: iLFM = %.4f %+.4f·Ψ %+.3f·LDMC %+.3f·(Ψ × LDMC)\n\n",
+            raw_int, raw_psi, raw_ldmc, raw_int2))
 
 # Standardization parameters — modelers must apply these to their raw values
 std_params <- df_angio %>%
   summarise(
     mwp_mean  = round(mean(mwp,  na.rm = TRUE), 4), mwp_sd  = round(sd(mwp,  na.rm = TRUE), 4),
-    sla_mean  = round(mean(sla,  na.rm = TRUE), 4), sla_sd  = round(sd(sla,  na.rm = TRUE), 4),
     ldmc_mean = round(mean(ldmc, na.rm = TRUE), 4), ldmc_sd = round(sd(ldmc, na.rm = TRUE), 4)
   )
 
@@ -868,13 +1089,13 @@ cv_pred_eq1 <- rep(NA, nrow(df_angio))
 for (sp in unique(df_angio$species)) {
   train <- df_angio %>% filter(species != sp)
   test  <- df_angio %>% filter(species == sp)
-  m_cv  <- lmer(ilfm ~ mwp_z + mwp_z:sla_z + mwp_z:ldmc_z + (1 | species),
-                data = train, REML = FALSE)
+  m_cv  <- lmer(ilfm ~ mwp_z * ldmc_z + (mwp_z | species),
+                data = train, REML = FALSE, control = ctrl_rs)
   cv_pred_eq1[df_angio$species == sp] <- predict(m_cv, newdata = test,
                                                    allow.new.levels = TRUE)
 }
-r2_eq1 <- cor(df_angio$ilfm, cv_pred_eq1, use = "complete.obs")^2
-cat(sprintf("\nCross-val R² (LOSO, angiosperms): %.3f\n", r2_eq1))
+r2_eq1 <- r2_species_weighted(df_angio$ilfm, cv_pred_eq1, df_angio$species)
+cat(sprintf("\nCross-val R² (LOSO, angiosperms, species-weighted): %.3f\n", r2_eq1))
 ```
 
 ### Equation 2: LFMmin (trait-only, no contemporaneous ψ required)
@@ -883,38 +1104,65 @@ Species-level regression of minimum seasonal LFM on functional traits.
 Modelers supply only trait values from a database; no real-time measurements needed.
 
 ```{r supp_eq2_lfmmin}
-# Species-level data (one row per angiosperm species)
+# Species-level data (one row per angiosperm species). Salvia excluded, as in Table S7,
+# Eq S2 and Fig 9: with them included the LFMmin ~ LDMC relationship disappears (see Q3).
 angio_sp <- q3_df %>%
   filter(functional_type == "angiosperm",
+         !species %in% c("SALLEU", "SALMEL"),
          !is.na(min_lfm), !is.na(plc50_stem), !is.na(sla), !is.na(ldmc), !is.na(psi_tlp)) %>%
   mutate(min_lfm_pct = min_lfm * 100)  # convert to % for interpretability
 
 cat(sprintf("Angiosperms with complete trait data: n = %d species\n\n", nrow(angio_sp)))
 
-# Full model: all four traits
-mod_eq2_full <- lm(min_lfm_pct ~ plc50_stem + psi_tlp + sla + ldmc, data = angio_sp)
-cat("=== Full trait model (LFMmin ~ P50 + TLP + SLA + LDMC) ===\n")
-print(summary(mod_eq2_full))
+# Select the trait model by leave-one-species-out cross-validation (each row is a species),
+# over every combination of P50, SLA, LDMC and TLP
+eq2_traits <- c("plc50_stem", "sla", "ldmc", "psi_tlp")
+eq2_cands  <- unlist(lapply(seq_along(eq2_traits), function(k) combn(eq2_traits, k, simplify = FALSE)),
+                     recursive = FALSE)
 
-# Reduced model: P50 only (most ecologically interpretable, Q3 established this relationship)
-mod_eq2_p50 <- lm(min_lfm_pct ~ plc50_stem, data = angio_sp)
-cat("\n=== P50-only model ===\n")
-print(summary(mod_eq2_p50))
+loo_r2 <- function(f, d) {
+  pred <- sapply(seq_len(nrow(d)), function(i) predict(lm(f, d[-i, ]), d[i, ]))
+  1 - sum((d$min_lfm_pct - pred)^2) / sum((d$min_lfm_pct - mean(d$min_lfm_pct))^2)
+}
 
-# Report AIC for comparison
-cat(sprintf("\nAIC full model: %.1f\nAIC P50-only:   %.1f\n",
-            AIC(mod_eq2_full), AIC(mod_eq2_p50)))
+eq2_table <- map_dfr(eq2_cands, function(v) {
+  f <- as.formula(paste("min_lfm_pct ~", paste(v, collapse = " + ")))
+  m <- lm(f, data = angio_sp)
+  tibble(model  = paste(v, collapse = " + "),
+         R2     = summary(m)$r.squared,
+         adj_R2 = summary(m)$adj.r.squared,
+         LOO_R2 = loo_r2(f, angio_sp))
+}) %>%
+  arrange(desc(LOO_R2))
+
+cat("=== Candidate trait models for LFMmin (ranked by leave-one-species-out R²) ===\n")
+print(eq2_table %>% mutate(across(where(is.numeric), ~ round(.x, 3))))
+
+# Parsimony: among models within 0.02 LOO R² of the best, take the fewest traits
+# (P50 + LDMC + TLP and P50 + LDMC differ by 0.01; TLP p = 0.33)
+eq2_best <- eq2_table %>%
+  mutate(n_terms = lengths(strsplit(model, " \\+ "))) %>%
+  filter(LOO_R2 >= max(LOO_R2) - 0.02) %>%
+  arrange(n_terms, desc(LOO_R2)) %>%
+  slice(1) %>% pull(model)
+mod_eq2  <- lm(as.formula(paste("min_lfm_pct ~", eq2_best)), data = angio_sp)
+cat("\n=== CV-best model:", eq2_best, "===\n")
+print(summary(mod_eq2))
 
 # Format final equation coefficients for manuscript
+trait_labels <- c(plc50_stem = "P50", sla = "SLA", ldmc = "LDMC", psi_tlp = "TLP")
+b <- coef(mod_eq2)
 cat("\n=== Supplemental Equation 2: LFMmin (%) ===\n")
-b <- round(coef(mod_eq2_full), 3)
-cat(sprintf("LFMmin = %.3f + %.3f·P50 + %.3f·TLP + %.3f·SLA + %.3f·LDMC\n",
-            b["(Intercept)"], b["plc50_stem"], b["psi_tlp"], b["sla"], b["ldmc"]))
+cat(sprintf("LFMmin = %.3f%s\n", b[1],
+            paste(sprintf(" %s %.3f·%s", ifelse(b[-1] < 0, "−", "+"), abs(b[-1]), trait_labels[names(b)[-1]]),
+                  collapse = "")))
+cat(sprintf("  n = %d species; R² = %.2f; leave-one-species-out R² = %.2f\n",
+            nrow(angio_sp), summary(mod_eq2)$r.squared, eq2_table$LOO_R2[eq2_table$model == eq2_best]))
 cat("  P50 and TLP in MPa; SLA in cm² g⁻¹; LDMC as proportion (g g⁻¹)\n")
-cat("  Applies to angiosperms only\n")
+cat("  Applies to angiosperms only (Salvia excluded)\n")
 
 # Plot: observed vs. predicted LFMmin
-angio_sp$lfmmin_pred <- predict(mod_eq2_full)
+angio_sp$lfmmin_pred <- predict(mod_eq2)
 
 ggplot(angio_sp, aes(x = lfmmin_pred, y = min_lfm_pct)) +
   geom_point(size = 3, alpha = 0.8) +

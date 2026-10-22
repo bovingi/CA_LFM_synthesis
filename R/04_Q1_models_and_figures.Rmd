@@ -1082,9 +1082,16 @@ library(readr)
 library(here)
 
 
-mod_common_slope <- lmer(ilfm ~ mwp + species + (1 | study), data = df1, REML = FALSE)
+# Common-slope model (species intercepts, one slope); used for the Fig 5 isoclines and points.
+# Fixed effects only, for the same reason as the species-interaction model below
+mod_common_slope <- lm(ilfm ~ mwp + species, data = df1)
 
-mod_species_interaction <- lmer(ilfm ~ mwp * species + (1 | study), data = df1, REML = FALSE)
+# Species intercepts and slopes from a fixed-effects species-interaction model (equivalent to a
+# separate regression per species), so LFMmax = 1/intercept describes each species at the site(s)
+# where it was sampled. With four unbalanced sites (two species at Sedgwick) a study random
+# intercept is poorly identified and, when dropped from the extracted intercepts, shifts LFMmax
+# (e.g. QUEDOU 205% -> 318%); the study random effect is kept as a sensitivity check (Table S5).
+mod_species_interaction <- lm(ilfm ~ mwp * species, data = df1)
 
 mod_species_study <- lm(ilfm ~ mwp * sp_site, data = df1)
 
@@ -1095,8 +1102,8 @@ extract_model_info <- function(model, model_name) {
 }
 
 model_coeffs <- bind_rows(
-  extract_model_info(mod_common_slope, "common_slope_reStudy"),
-  extract_model_info(mod_species_interaction, "species_interaction_reStudy"),
+  extract_model_info(mod_common_slope, "common_slope"),
+  extract_model_info(mod_species_interaction, "species_interaction"),
   extract_model_info(mod_species_study, "species_site_interaction")
 )
 
@@ -1145,11 +1152,11 @@ compute_group_terms <- function(model, group_var, model_type, slope_var = "mwp")
 
 
 coefs_common <- compute_group_terms(
-  mod_common_slope, "species", "common_slope_reStudy"
+  mod_common_slope, "species", "common_slope"
 ) %>% rename(species = group)
 
 coefs_species_int <- compute_group_terms(
-  mod_species_interaction, "species", "species_interaction_reStudy"
+  mod_species_interaction, "species", "species_interaction"
 ) %>% rename(species = group)
 
 coefs_species_study <- compute_group_terms(
@@ -1160,8 +1167,8 @@ coefs_species_study <- compute_group_terms(
 
 coef_compare_df <- bind_rows(coefs_common, coefs_species_int, coefs_species_study) %>%
   mutate(group = case_when(
-    model == "species_interaction_reStudy" ~ "species",
-    model == "common_slope_reStudy"        ~ "grand",
+    model == "species_interaction"         ~ "species",
+    model == "common_slope"               ~ "grand",
     model == "species_site_interaction"    ~ "sp_study",
     TRUE ~ NA_character_
   )) %>%
